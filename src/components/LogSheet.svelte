@@ -87,7 +87,7 @@
     {/if}
 
     <div class="stack" style="margin-top:20px">
-      <button class="btn primary big block" onclick={done}>Fatto</button>
+      <button class="btn primary big block" onclick={done}>Salva</button>
       <button class="btn block" onclick={details}>Tutti i dettagli (zone, sintomi, aura…)</button>
       <a class="btn link" href={'#/redflags?id=' + id} onclick={done}>Questo mal di testa è diverso dal solito?</a>
     </div>

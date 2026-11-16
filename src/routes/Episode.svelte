@@ -67,6 +67,17 @@
     ep?.meds.push(intakeFrom(m));
     await rememberMed(m);
   }
+  // Il salvataggio è automatico: il pulsante forza la scrittura immediata e chiude la pagina
+  async function saveNow() {
+    if (!ep) return;
+    clearTimeout(timer);
+    lastJson = JSON.stringify(ep);
+    if (getEpisode(id)) await saveEpisode(JSON.parse(lastJson));
+    haptic();
+    toast('Episodio salvato');
+    back('/');
+  }
+
   async function del() {
     if (!ep) return;
     clearTimeout(timer);
@@ -77,6 +88,7 @@
     back('/');
   }
   const toggle = (k: string) => (open[k] = !open[k]);
+  import { haptic, toast } from '../lib/ui.svelte';
 </script>
 
 <div class="page fade">
@@ -221,6 +233,7 @@
       </section>
     {/if}
 
+    <button class="btn primary big block" onclick={saveNow}>Salva</button>
     <a class="btn link block" href={'#/redflags?id=' + ep.id}>Questo mal di testa è diverso dal solito?</a>
     <button class="btn block ghost danger" onclick={del}>Elimina episodio</button>
   {/if}
