@@ -78,7 +78,7 @@
     {#if ep && ep.meds.length}
       <p class="small muted">Registrati: {ep.meds.map((m) => m.name).join(', ')}</p>
     {/if}
-    <MedPicker onpick={(m) => ep && takeMed(m, ep)} limit={3} />
+    <MedPicker onpick={(m, t) => ep && takeMed(m, ep, t)} limit={4} />
 
     <h3>Cosa può averlo scatenato?</h3>
     <Chips options={trigOpts} bind:value={triggers} onchange={saveTriggers} />

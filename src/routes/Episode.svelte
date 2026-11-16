@@ -63,8 +63,8 @@
     if (!ep.triggers.includes(tid)) ep.triggers.push(tid);
     newTrigger = '';
   }
-  async function addMed(m: Parameters<typeof intakeFrom>[0]) {
-    ep?.meds.push(intakeFrom(m));
+  async function addMed(m: Parameters<typeof intakeFrom>[0], time: string) {
+    ep?.meds.push(intakeFrom(m, time));
     await rememberMed(m);
   }
   // Il salvataggio è automatico: il pulsante forza la scrittura immediata e chiude la pagina
@@ -88,6 +88,8 @@
     back('/');
   }
   const toggle = (k: string) => (open[k] = !open[k]);
+  let editMed = $state<Record<string, boolean>>({});
+  const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
   import { haptic, toast } from '../lib/ui.svelte';
 </script>
 
@@ -195,20 +197,25 @@
       {#each ep.meds as m, i (m.id)}
         <div class="med">
           <div class="row">
-            <strong class="grow">{m.name}</strong>
-            <span class="small muted">{classLabel(m.cls)}</span>
+            <div class="grow">
+              <strong>{m.name}</strong>
+              <div class="small muted">ore {hhmm(m.time)}{m.dose ? ` · ${m.dose}` : ''} · {classLabel(m.cls)}</div>
+            </div>
+            <button class="btn ghost small" onclick={() => (editMed[m.id] = !editMed[m.id])}>{editMed[m.id] ? 'Chiudi' : 'Modifica'}</button>
             <button class="btn ghost" aria-label="Rimuovi {m.name}" onclick={() => ep && ep.meds.splice(i, 1)}>✕</button>
           </div>
-          <div class="row">
-            <input type="datetime-local" aria-label="Ora" value={toLocal(m.time)} onchange={(e) => e.currentTarget.value && (m.time = fromLocal(e.currentTarget.value))} />
-            <input type="text" aria-label="Dose" placeholder="Dose" style="width:40%" bind:value={m.dose} />
-          </div>
+          {#if editMed[m.id]}
+            <div class="row">
+              <input type="datetime-local" aria-label="Ora" value={toLocal(m.time)} onchange={(e) => e.currentTarget.value && (m.time = fromLocal(e.currentTarget.value))} />
+              <input type="text" aria-label="Dose" placeholder="Dose" style="width:40%" bind:value={m.dose} />
+            </div>
+          {/if}
           <span class="label">Effetto dopo 2 ore</span>
           <Chips options={EFFICACY} bind:value={m.efficacy} multi={false} seg />
           <label class="check"><input type="checkbox" bind:checked={m.recurrence24h} /> Il dolore è tornato entro 24 h</label>
         </div>
       {/each}
-      <span class="label">{ep.meds.length ? 'Aggiungi un altro farmaco' : 'Tocca un farmaco per registrarlo adesso'}</span>
+      <span class="label">{ep.meds.length ? 'Aggiungi un altro farmaco' : 'Scegli quando e tocca il farmaco'}</span>
       <div style="height:8px"></div>
       <MedPicker onpick={addMed} limit={4} />
     </section>

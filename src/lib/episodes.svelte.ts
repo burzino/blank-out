@@ -61,15 +61,15 @@ export function intakeFrom(m: { name: string; cls: MedClass; dose?: string }, ti
 }
 
 /** Registra un farmaco: sull'episodio in corso, oppure ne apre uno nuovo. */
-export async function takeMed(m: { name: string; cls: MedClass; dose?: string }, target?: Episode) {
+export async function takeMed(m: { name: string; cls: MedClass; dose?: string }, target?: Episode, time?: string) {
   let e = target ?? activeEpisode();
   let created = false;
   if (!e) {
-    e = newEpisode({ intensity: 5 });
+    e = newEpisode({ intensity: 5, start: time ?? new Date().toISOString() });
     created = true;
   }
   const copy = clone(e);
-  const intake = intakeFrom(m);
+  const intake = intakeFrom(m, time);
   copy.meds.push(intake);
   await saveEpisode(copy);
   await rememberMed(m);

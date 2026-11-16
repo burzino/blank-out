@@ -176,8 +176,8 @@
 
 <Sheet bind:open={medOpen} title="Cosa hai preso?">
   <MedPicker
-    onpick={(m) => {
-      takeMed(m);
+    onpick={(m, t) => {
+      takeMed(m, undefined, t);
       medOpen = false;
     }}
     limit={6}
