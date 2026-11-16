@@ -252,4 +252,25 @@ export const DISCLAIMER =
 
 export const CLASSIFY_NOTE = 'Classificazione indicativa basata sui criteri ICHD-3 applicati a un singolo episodio. Non è una diagnosi: la diagnosi spetta al medico.';
 
+// Check-in giornaliero
+export const CHECKIN = {
+  sleep: [{ id: 'poco', label: 'Poco' }, { id: 'ok', label: 'Giusto' }, { id: 'troppo', label: 'Troppo' }],
+  stress: [{ id: 'basso', label: 'Basso' }, { id: 'medio', label: 'Medio' }, { id: 'alto', label: 'Alto' }],
+  meals: [{ id: 'regolari', label: 'Regolari' }, { id: 'saltato', label: 'Saltato un pasto' }],
+  water: [{ id: 'poca', label: 'Poca' }, { id: 'ok', label: 'Abbastanza' }],
+  caffeine: [{ id: 'meno', label: 'Meno del solito' }, { id: 'solito', label: 'Il solito' }, { id: 'piu', label: 'Di più' }]
+} satisfies Record<string, Opt[]>;
+
+// Segnali premonitori (prodromi): spesso 24-48 h prima dell'attacco
+export const PRODROMES: Opt[] = [
+  { id: 'sbadigli', label: 'Sbadigli frequenti' },
+  { id: 'stanchezza', label: 'Stanchezza insolita' },
+  { id: 'collo', label: 'Collo rigido' },
+  { id: 'fame_dolci', label: 'Voglia di dolci / cibo' },
+  { id: 'irritabilita', label: 'Irritabilità, umore giù' },
+  { id: 'concentrazione', label: 'Fatica a concentrarmi' },
+  { id: 'luce', label: 'Fastidio alla luce' },
+  { id: 'sete_urina', label: 'Sete o urinare spesso' }
+];
+
 export const labelOf = (list: Opt[], id: string) => list.find((o) => o.id === id)?.label ?? id;

@@ -147,7 +147,7 @@ export async function deleteQuestionnaire(id: string) {
 export const getDay = (date: string) => data.days.find((d) => d.date === date);
 
 export async function saveDay(day: DayInfo) {
-  const empty = !day.period && !day.periodStart && !day.headacheFree;
+  const empty = !day.period && !day.periodStart && !day.headacheFree && !day.checkin;
   data.days = data.days.filter((d) => d.date !== day.date);
   if (empty) return del('days', day.date);
   data.days.push(day);

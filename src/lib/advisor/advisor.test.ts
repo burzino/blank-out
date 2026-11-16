@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Episode, MedIntake } from '../types';
+import { attackPlan, dailyPlan, weeklyGoals } from './coach';
 import { overallDiagnosis } from './diagnosis';
 import { recommendations } from './recommendations';
-import type { AdvisorContext } from './types';
+import type { AdvisorContext, TriggerRisk } from './types';
 
 const ep = (p: Partial<Episode>): Episode => ({
   id: Math.random().toString(36),
@@ -95,5 +96,40 @@ describe('recommendations', () => {
     expect(acute.some((a) => a.id === 'chiedi_triptano')).toBe(true);
     for (const a of adv) expect(`${a.title} ${a.text} ${a.why}`).not.toMatch(/\bmg\b|\d\s*mg/i);
     for (const a of acute) expect(a.text.toLowerCase()).toContain('medico');
+  });
+});
+
+describe('coach', () => {
+  const triggers: TriggerRisk[] = [
+    { id: 'sleep_poco', label: 'Dormire poco', rr: 2, low: 1.3, high: 3, exposedDays: 12, basis: 'personale' },
+    { id: 'meals_saltato', label: 'Saltare un pasto', rr: 1.5, low: 1, high: 2.2, exposedDays: 6, basis: 'misto' }
+  ];
+  const fc = { available: true, level: 'alto' as const, today: 0.6, drivers: [] };
+
+  it('rischio alto: azioni legate ai fattori di oggi, con il dato personale', () => {
+    const plan = dailyPlan(ctx([]), fc, triggers, [{ id: 'prodrome', label: 'Segnali premonitori' }, { id: 'sleep_poco', label: 'Dormito poco' }]);
+    expect(plan.level).toBe('alto');
+    expect(plan.actions.length).toBeGreaterThanOrEqual(2);
+    expect(plan.actions.length).toBeLessThanOrEqual(4);
+    expect(plan.actions.map((a) => a.id)).toEqual(expect.arrayContaining(['prodrome', 'sleep_poco']));
+    expect(plan.actions.find((a) => a.id === 'sleep_poco')!.why).toContain('raddoppia');
+  });
+
+  it('nessuna azione contiene dosaggi', () => {
+    const c = ctx([3, 9, 15].map((d) => migraine(d)));
+    const texts = [
+      ...(['alto', 'medio', 'basso'] as const).flatMap((level) =>
+        dailyPlan(c, { ...fc, level }, triggers, [{ id: 'water_poca', label: 'Bevuto poco' }, { id: 'stress_alto', label: 'Stress alto' }]).actions.map((a) => a.text + a.why)
+      ),
+      ...attackPlan(c).map((a) => a.text)
+    ];
+    for (const t of texts) expect(t).not.toMatch(/mg|\d\s*mg/i);
+  });
+
+  it('senza check-in: obiettivo di fare il check-in', () => {
+    const goals = weeklyGoals(ctx([]), triggers);
+    expect(goals).toHaveLength(1);
+    expect(goals[0].id).toBe('checkin');
+    expect(goals[0].done).toBe(0);
   });
 });

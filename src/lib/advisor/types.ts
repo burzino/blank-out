@@ -56,10 +56,40 @@ export interface WeatherDay {
 
 export interface Forecast {
   available: boolean;
+  basis?: 'generale' | 'misto' | 'personale'; // quanto la stima si basa sui dati dell'utente vs letteratura
+  brier?: number; // errore di calibrazione sui dati dell'utente (più basso = meglio)
   reason?: string; // perché non disponibile (es. "servono almeno 60 giorni e 8 attacchi")
   today?: number; // probabilità 0-1
   tomorrow?: number;
   level?: 'basso' | 'medio' | 'alto';
   drivers: { label: string; effect: 'aumenta' | 'riduce' }[]; // fattori principali della stima di oggi
   quality?: { auc: number; samples: number }; // qualità del modello sui dati dell'utente
+}
+
+/** Rischio personale associato a un fattore, stimato con i giorni di check-in come confronto. */
+export interface TriggerRisk {
+  id: string; // es. 'sleep_poco', 'stress_alto', 'meals_saltato', 'alcohol', 'prodrome', 'pressure_drop', 'perimenstrual'
+  label: string; // es. "Dormire poco"
+  rr: number; // rischio relativo stimato (1 = nessun effetto)
+  low: number; // intervallo di credibilità/confidenza 90%
+  high: number;
+  exposedDays: number; // giorni osservati con il fattore presente
+  basis: 'generale' | 'misto' | 'personale';
+}
+
+/** Piano di oggi: poche azioni pratiche, non mediche. */
+export interface DailyPlan {
+  level: 'basso' | 'medio' | 'alto';
+  headline: string;
+  actions: { id: string; text: string; why: string }[]; // 2-4 azioni
+}
+
+/** Obiettivo settimanale su un trigger personale, con progresso dai check-in. */
+export interface WeeklyGoal {
+  id: string;
+  title: string;
+  why: string;
+  target: number;
+  done: number;
+  unit: string; // es. "giorni"
 }

@@ -11,6 +11,12 @@
   import MedPicker from '../components/MedPicker.svelte';
   import Sheet from '../components/Sheet.svelte';
   import { drive, reauth } from '../lib/drive.svelte';
+  import CheckIn from '../components/CheckIn.svelte';
+  import { forecast, riskFactorsToday } from '../lib/advisor/forecast';
+  import { personalTriggers } from '../lib/advisor/triggers';
+  import { attackPlan, dailyPlan } from '../lib/advisor/coach';
+  import type { AdvisorContext } from '../lib/advisor/types';
+  import { loadCachedWeather } from '../lib/advisor/weather';
 
   // Scorciatoia #/log: apre lo sheet una volta sola (tornando indietro non deve riaprirlo)
   // e non apre un secondo episodio se ce n'è già uno in corso
@@ -73,6 +79,20 @@
     toast('Giornata segnata senza mal di testa', { label: 'Annulla', run: () => saveDay({ ...getDay(today)!, headacheFree: false }) });
   }
 
+  // Piano di oggi: previsione + trigger personali + fattori presenti oggi (tutto sul dispositivo)
+  const actx = $derived<AdvisorContext>({
+    episodes: data.episodes,
+    days: data.days,
+    questionnaires: data.questionnaires,
+    prophylaxis: data.prophylaxis,
+    medications: data.medications,
+    now: clock.now,
+    weather: settings.weatherEnabled ? loadCachedWeather() : undefined
+  });
+  const plan = $derived(active ? null : dailyPlan(actx, forecast(actx), personalTriggers(actx), riskFactorsToday(actx)));
+  const duringAttack = $derived(active ? attackPlan(actx) : []);
+  const LEVEL_TXT = { basso: 'Rischio basso', medio: 'Rischio medio', alto: 'Rischio alto' };
+
   const avg = $derived(stats.avgIntensity == null ? '–' : stats.avgIntensity.toFixed(1));
 </script>
 
@@ -113,6 +133,31 @@
     <button class="card nav sync" onclick={() => reauth()}>
       <span class="grow">Backup in sospeso · <strong>tocca per sincronizzare</strong></span><span aria-hidden="true">›</span>
     </button>
+  {/if}
+
+  {#if active && duringAttack.length}
+    <details class="card plan" open>
+      <summary><h2 class="t">Cosa fare adesso</h2></summary>
+      <ul>
+        {#each duringAttack as a (a.id)}<li>{a.text}</li>{/each}
+      </ul>
+    </details>
+  {/if}
+
+  {#if plan}
+    <section class="card plan">
+      <div class="row between">
+        <h2 class="t">Il piano di oggi</h2>
+        <span class="lvl l-{plan.level}">{LEVEL_TXT[plan.level]}</span>
+      </div>
+      <p class="small" style="margin:8px 0 4px">{plan.headline}</p>
+      <ul>
+        {#each plan.actions as a (a.id)}
+          <li><span>{a.text}</span><span class="small muted why">{a.why}</span></li>
+        {/each}
+      </ul>
+    </section>
+    <CheckIn />
   {/if}
 
   {#each pending as p (p.med.id)}
@@ -201,6 +246,16 @@
   details summary strong { margin: 0; flex: 1; }
   .more { color: var(--accent); }
   details[open] .more { display: none; }
+  .t { margin: 0; }
+  .plan summary { list-style: none; cursor: pointer; }
+  .plan summary::-webkit-details-marker { display: none; }
+  .plan ul { margin: 10px 0 0; padding-left: 20px; }
+  .plan li { margin-bottom: 10px; }
+  .why { display: block; margin-top: 2px; }
+  .lvl { font-size: 0.8rem; padding: 3px 12px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+  .l-basso { background: var(--i1); color: var(--on-i); }
+  .l-medio { background: var(--i2); color: var(--on-i); }
+  .l-alto { background: var(--i3); color: var(--on-i); }
   .sync { width: 100%; text-align: left; font: inherit; color: var(--text); cursor: pointer; }
   .cta { margin: 0 0 24px; }
   .huge { min-height: 88px; font-size: 1.35rem; }

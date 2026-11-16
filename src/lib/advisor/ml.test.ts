@@ -3,6 +3,8 @@ import { addDays, keyToDate } from '../clinic';
 import type { Episode } from '../types';
 import { forecast, predictLogistic, trainLogistic } from './forecast';
 import { findPatterns } from './patterns';
+import { LIT, personalTriggers } from './triggers';
+import type { DayInfo } from '../types';
 import type { AdvisorContext } from './types';
 
 const ep = (start: string, hours = 6): Episode => ({
@@ -58,11 +60,13 @@ describe('regressione logistica', () => {
     expect(f.tomorrow!).toBeGreaterThan(f.today!);
   });
 
-  it('forecast non disponibile con pochi dati', () => {
-    const eps = [ep('2026-03-02T09:00:00'), ep('2026-03-10T09:00:00'), ep('2026-03-20T09:00:00')];
-    const f = forecast(ctx(eps, new Date('2026-04-01T12:00:00')));
-    expect(f.available).toBe(false);
-    expect(f.reason).toMatch(/almeno 60 giorni/);
+  it('forecast disponibile dal primo giorno, basato su dati generali', () => {
+    const f = forecast(ctx([], new Date('2026-04-01T12:00:00')));
+    expect(f.available).toBe(true);
+    expect(f.basis).toBe('generale');
+    expect(f.today!).toBeGreaterThan(0.03);
+    expect(f.today!).toBeLessThan(0.4);
+    expect(f.reason).toMatch(/dati generali/);
   });
 });
 
@@ -75,5 +79,34 @@ describe('findPatterns', () => {
     const p = ps.find((x) => x.id === 'fascia-oraria');
     expect(p?.title).toMatch(/mattino/);
     expect(p?.chart?.length).toBe(4);
+  });
+});
+
+describe('personalTriggers', () => {
+  it('senza dati resta sul prior della letteratura', () => {
+    const r = personalTriggers(ctx([], new Date('2026-04-01T12:00:00')));
+    const sleep = r.find((x) => x.id === 'sleep_poco')!;
+    expect(sleep.basis).toBe('generale');
+    expect(sleep.exposedDays).toBe(0);
+    expect(sleep.rr).toBeCloseTo(LIT.sleep_poco.rr, 1);
+    expect(sleep.low).toBeLessThan(sleep.rr);
+    expect(sleep.high).toBeGreaterThan(sleep.rr);
+  });
+
+  it('impara che dormire poco precede gli attacchi', () => {
+    const eps: Episode[] = [];
+    const days: DayInfo[] = [];
+    let k = '2026-01-01';
+    for (let i = 0; i < 150; i++, k = addDays(k, 1)) {
+      const before = i % 6 === 4; // la notte prima dell'attacco: sonno scarso
+      if (i % 6 === 5) eps.push(ep(`${k}T10:00:00`));
+      days.push({ date: k, checkin: { at: `${k}T08:00:00`, sleep: before ? 'poco' : 'ok', stress: 'medio' } });
+    }
+    const c = ctx(eps, new Date(`${k}T12:00:00`));
+    c.days = days;
+    const sleep = personalTriggers(c).find((x) => x.id === 'sleep_poco')!;
+    expect(sleep.rr).toBeGreaterThan(1.5);
+    expect(sleep.basis).not.toBe('generale');
+    expect(sleep.exposedDays).toBeGreaterThan(20);
   });
 });

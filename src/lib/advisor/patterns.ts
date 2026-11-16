@@ -1,11 +1,13 @@
 // Analisi dei pattern sui dati dell'utente, tutto sul dispositivo.
 // Nota metodologica: i fattori scatenanti sono registrati solo nei giorni CON mal di testa (nessun giorno di
 // controllo), quindi per loro riportiamo solo la frequenza, mai un rischio relativo. I confronti di rischio si fanno
-// solo con variabili note ogni giorno: giorno della settimana, ciclo, meteo, giorni dall'ultimo attacco.
-import { TRIGGERS, labelOf } from '../catalog';
+// solo con variabili note ogni giorno: giorno della settimana, ciclo, meteo, giorni dall'ultimo attacco e, da
+// quando c'è il check-in giornaliero, i fattori del check-in (stime bayesiane in triggers.ts).
+import { PRODROMES, TRIGGERS, labelOf } from '../catalog';
 import { addDays, computeStats, dayKey, daysBetween, durationMin, formatDuration, keyToDate, periodStarts, rangeKeys } from '../clinic';
 import type { Episode } from '../types';
-import type { AdvisorContext, Confidence, Pattern } from './types';
+import { buildTimeline, personalTriggers, type Timeline } from './triggers';
+import type { AdvisorContext, Confidence, Pattern, TriggerRisk } from './types';
 
 export const MIN_EPISODES = 8;
 
@@ -232,10 +234,9 @@ function cycle(b: DailyBase, ctx: AdvisorContext): Scored | null {
   const to = toCand < b.last ? toCand : b.last;
   const keys = rangeKeys(from, to);
   if (keys.length < 30) return null;
-  const inWin = (k: string) => starts.some((s) => {
-    const d = daysBetween(s, k);
-    return d >= -2 && d <= 2; // giorno 1 = s: finestra ICHD da −2 a +3
-  });
+  // giorno 1 = s: finestra ICHD da −2 a +3
+  const win = new Set(starts.flatMap((s) => [-2, -1, 0, 1, 2].map((d) => addDays(s, d))));
+  const inWin = (k: string) => win.has(k);
   let a1 = 0, n1 = 0, a2 = 0, n2 = 0;
   for (const k of keys) {
     const y = b.startDays.has(k) ? 1 : 0;
@@ -526,11 +527,29 @@ function durationChange(b: DailyBase, ctx: AdvisorContext): Scored | null {
   };
 }
 
-function triggers(b: DailyBase): Scored | null {
+// Fattori del diario (annotati solo durante gli attacchi) → fattore del check-in con stima a confronto
+const TRIGGER_TO_FACTOR: Record<string, string> = {
+  sonno_scarso: 'sleep_poco',
+  sonno_eccessivo: 'sleep_troppo',
+  stress: 'stress_alto',
+  digiuno: 'meals_saltato',
+  disidratazione: 'water_poca',
+  caffeina_eccesso: 'caffeine_piu',
+  astinenza_caffeina: 'caffeine_meno',
+  alcol: 'alcohol',
+  ciclo_mestruale: 'perimenstrual',
+  meteo: 'pressure_drop'
+};
+
+function triggers(b: DailyBase, risks: TriggerRisk[]): Scored | null {
   const n = b.valid.length;
+  // Se per un fattore c'è già una stima con giorni di confronto, la sola frequenza non serve
+  const estimated = new Set(risks.filter((r) => r.basis !== 'generale').map((r) => r.id));
   const map = new Map<string, number>();
   for (const e of b.valid) for (const t of new Set(e.triggers)) map.set(t, (map.get(t) ?? 0) + 1);
-  const list = [...map.entries()].filter(([, c]) => c >= 3 && c / n >= 0.15).sort((a, b) => b[1] - a[1]);
+  const list = [...map.entries()]
+    .filter(([id, c]) => c >= 3 && c / n >= 0.15 && !estimated.has(TRIGGER_TO_FACTOR[id]))
+    .sort((a, b) => b[1] - a[1]);
   if (!list.length) return null;
   const [topId, topC] = list[0];
   const label = labelOf(TRIGGERS, topId);
@@ -541,10 +560,82 @@ function triggers(b: DailyBase): Scored | null {
   return {
     id: 'fattori-frequenti',
     title: `Fattore più segnalato: ${label.toLowerCase()}`,
-    detail: `"${label}" è presente nel ${pct(topC / n)} degli attacchi (${topC} su ${n}).${list[1] ? ` Seguono: ${list.slice(1, 3).map(([id, c]) => `${labelOf(TRIGGERS, id).toLowerCase()} (${pct(c / n)})`).join(', ')}.` : ''} Questi fattori vengono annotati solo nei giorni con mal di testa: indicano cosa accompagna spesso i tuoi attacchi, non quanto aumentino il rischio.`,
+    detail: `"${label}" è presente nel ${pct(topC / n)} degli attacchi (${topC} su ${n}).${list[1] ? ` Seguono: ${list.slice(1, 3).map(([id, c]) => `${labelOf(TRIGGERS, id).toLowerCase()} (${pct(c / n)})`).join(', ')}.` : ''} Questi fattori vengono annotati solo nei giorni con mal di testa: indicano cosa accompagna spesso i tuoi attacchi, non quanto aumentino il rischio. Con il check-in giornaliero si potrà stimarlo davvero.`,
     strength,
     p: 0.5,
     chart: list.slice(0, 8).map(([id, c]) => ({ label: labelOf(TRIGGERS, id), value: Math.round((c / n) * 100) }))
+  };
+}
+
+const fmtRR = (x: number) => round1(x).toLocaleString('it-IT');
+// Ciclo, meteo e weekend hanno già pattern dedicati; i prodromi hanno il loro
+const OWN_PATTERN = (id: string) => id === 'perimenstrual' || id === 'pressure_drop' || id === 'weekend' || id.startsWith('prodrome');
+
+/** Fattori del check-in con rischio stimato sui giorni di confronto (solo stime personali o miste). */
+function triggerRisks(risks: TriggerRisk[]): Scored | null {
+  const own = risks.filter((r) => r.basis !== 'generale' && !OWN_PATTERN(r.id));
+  if (!own.length) return null;
+  const up = own.filter((r) => r.low > 1).sort((a, b) => b.rr - a.rr);
+  const none = own.filter((r) => r.basis === 'personale' && r.high < 1.15);
+  const src = (r: TriggerRisk) => (r.basis === 'personale' ? 'dai tuoi dati' : 'tuoi dati + letteratura');
+  const chart = [...own].sort((a, b) => b.rr - a.rr).slice(0, 8).map((r) => ({ label: r.label, value: round1(r.rr) }));
+  const noneText = none.length ? ` Per te ${none.map((r) => r.label.toLowerCase()).join(', ')} non sembra contare molto.` : '';
+  const footer = ' Il rischio è confrontato con i giorni di check-in senza quel fattore (attacco iniziato lo stesso giorno o il giorno dopo; 1 = nessun effetto).';
+  if (!up.length)
+    return {
+      id: 'fattori-rischio',
+      title: 'Nessun fattore del check-in spicca per ora',
+      detail: `Dai check-in non emerge ancora un fattore che aumenti chiaramente il tuo rischio.${noneText}${footer}`,
+      strength: 'bassa',
+      p: 0.5,
+      chart
+    };
+  const top = up[0];
+  return {
+    id: 'fattori-rischio',
+    title: `${top.label}: per te il rischio sale`,
+    detail: `${up
+      .slice(0, 4)
+      .map((r) => `${r.label}: circa ${fmtRR(r.rr)} volte (tra ${fmtRR(r.low)} e ${fmtRR(r.high)}, ${src(r)}, ${r.exposedDays} giorni)`)
+      .join('; ')}.${noneText}${footer}`,
+    strength: top.basis === 'personale' ? 'alta' : 'media',
+    p: top.basis === 'personale' ? 0.001 : 0.03,
+    chart
+  };
+}
+
+/** Segnali premonitori: quali compaiono nel check-in del giorno prima (o della mattina) di un attacco. */
+function prodromes(tl: Timeline, risks: TriggerRisk[]): Scored | null {
+  let withCheck = 0;
+  let withPro = 0;
+  const count = new Map<string, number>();
+  for (let i = 0; i < tl.today; i++) {
+    if (!tl.start[i]) continue;
+    // check-in del giorno prima, oppure dello stesso giorno se compilato prima dell'attacco
+    const cand = [i - 1, i].filter((j) => j >= 0 && tl.checkin[j] && !tl.duringAttack[j]);
+    if (!cand.length) continue;
+    withCheck++;
+    const ids = new Set(cand.flatMap((j) => tl.checkin[j]!.prodromes ?? []));
+    if (ids.size) withPro++;
+    for (const id of ids) count.set(id, (count.get(id) ?? 0) + 1);
+  }
+  if (withCheck < 5 || withPro / withCheck < 0.3) return null;
+  const list = [...count.entries()].sort((a, c) => c[1] - a[1]);
+  const names = list.slice(0, 3).map(([id]) => labelOf(PRODROMES, id).toLowerCase());
+  const risk = risks.find((r) => r.id === 'prodrome');
+  const riskText =
+    risk && risk.basis !== 'generale'
+      ? ` Nei giorni con segnali premonitori il rischio che inizi un attacco entro il giorno dopo è circa ${fmtRR(risk.rr)} volte quello degli altri giorni.`
+      : '';
+  let strength = strengthFromCI(withPro, withCheck);
+  if (risk?.basis === 'personale' && risk.low > 1) strength = 'alta';
+  return {
+    id: 'prodromi',
+    title: `Spesso prima di un attacco hai: ${names.join(', ')}`,
+    detail: `Prima di ${withPro} attacchi su ${withCheck} (con check-in del giorno prima) avevi segnali premonitori.${riskText} Quando li noti, tieni il farmaco a portata di mano e riduci gli altri fattori di rischio.`,
+    strength,
+    p: 0.01,
+    chart: list.slice(0, 8).map(([id, c]) => ({ label: labelOf(PRODROMES, id), value: Math.round((c / withCheck) * 100) }))
   };
 }
 
@@ -553,6 +644,8 @@ export function findPatterns(ctx: AdvisorContext): Pattern[] {
   const b = dailyBase(ctx);
   if (!b || b.valid.length < MIN_EPISODES) return [];
   const med = intakes(b);
+  const tl = buildTimeline(ctx);
+  const risks = personalTriggers(ctx, tl);
   const all: (Scored | null)[] = [
     timeOfDay(b),
     weekday(b),
@@ -563,7 +656,9 @@ export function findPatterns(ctx: AdvisorContext): Pattern[] {
     earlyLate(med),
     trend(b, ctx),
     durationChange(b, ctx),
-    triggers(b)
+    triggerRisks(risks),
+    prodromes(tl, risks),
+    triggers(b, risks)
   ];
   return all
     .filter((x): x is Scored => !!x)

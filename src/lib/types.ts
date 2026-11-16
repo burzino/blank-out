@@ -69,12 +69,27 @@ export interface Questionnaire {
   b?: number; // MIDAS B: intensità media 0-10
 }
 
-// Giorno di calendario con informazioni extra (ciclo, giornata senza mal di testa)
+// Check-in giornaliero (facoltativo, 10 secondi): dà i "giorni di confronto" per stimare i trigger veri.
+// Il sonno si riferisce alla notte precedente; il resto alla giornata.
+export interface CheckIn {
+  at: string; // ISO della compilazione
+  sleep?: 'poco' | 'ok' | 'troppo';
+  stress?: 'basso' | 'medio' | 'alto';
+  meals?: 'regolari' | 'saltato';
+  water?: 'poca' | 'ok';
+  caffeine?: 'meno' | 'solito' | 'piu';
+  alcohol?: boolean;
+  exercise?: boolean;
+  prodromes?: string[]; // id da PRODROMES in catalog.ts
+}
+
+// Giorno di calendario con informazioni extra (ciclo, giornata senza mal di testa, check-in)
 export interface DayInfo {
   date: string; // YYYY-MM-DD
   period?: boolean; // giorno di flusso
   periodStart?: boolean; // primo giorno del flusso
   headacheFree?: boolean;
+  checkin?: CheckIn;
 }
 
 export interface BackupFile {

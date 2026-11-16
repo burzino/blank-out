@@ -4,6 +4,8 @@
   import { ADVISOR_DISCLAIMER, recommendations } from '../lib/advisor/recommendations';
   import { findPatterns } from '../lib/advisor/patterns';
   import { forecast } from '../lib/advisor/forecast';
+  import { personalTriggers } from '../lib/advisor/triggers';
+  import { weeklyGoals } from '../lib/advisor/coach';
   import { fetchWeather, getLocation, loadCachedWeather } from '../lib/advisor/weather';
   import type { AdviceCategory, AdvisorContext, WeatherDay } from '../lib/advisor/types';
   import { addDays, dayKey } from '../lib/clinic';
@@ -28,6 +30,11 @@
   const advice = $derived(recommendations(ctx, dx));
   const patterns = $derived(findPatterns(ctx));
   const fc = $derived(forecast(ctx));
+  const trig = $derived(personalTriggers(ctx));
+  const goals = $derived(weeklyGoals(ctx, trig));
+  // Mostra i fattori che contano: personali/misti, oppure i più rilevanti da letteratura se mancano dati
+  const shownTrig = $derived(trig.filter((t) => t.rr >= 1.15).slice(0, 6));
+  const BASIS = { generale: 'dati generali', misto: 'tuoi dati + generali', personale: 'tuoi dati' };
 
   const CAT: Record<AdviceCategory, string> = {
     urgente: 'Importante',
@@ -124,6 +131,7 @@
         </ul>
       {/if}
       {#if fc.reason}<p class="small muted">{fc.reason}</p>{/if}
+      {#if fc.basis}<p class="small muted">Basata su: {BASIS[fc.basis]}</p>{/if}
       {#if fc.quality}<p class="small muted">Modello allenato sui tuoi {fc.quality.samples} giorni · accuratezza (AUC) {fc.quality.auc.toFixed(2)}</p>{/if}
     {:else}
       <p class="small muted">{fc.reason}</p>
@@ -138,6 +146,34 @@
       {/if}
     </div>
   </section>
+
+  {#if goals.length}
+    <section class="card">
+      <h2 class="t">Obiettivi della settimana</h2>
+      {#each goals as g (g.id)}
+        <div class="goal">
+          <div class="row between"><strong class="small">{g.title}</strong><span class="small num">{g.done}/{g.target} {g.unit}</span></div>
+          <span class="bar"><span style="width:{Math.min(100, (g.done / g.target) * 100)}%"></span></span>
+          <span class="small muted">{g.why}</span>
+        </div>
+      {/each}
+    </section>
+  {/if}
+
+  {#if shownTrig.length}
+    <section class="card">
+      <h2 class="t">I tuoi fattori di rischio</h2>
+      <p class="small muted" style="margin:6px 0 10px">Quanto aumenta la probabilità di un attacco (oggi o domani). Il check-in giornaliero rende queste stime tue.</p>
+      {#each shownTrig as t (t.id)}
+        <div class="bar-row trig">
+          <span class="small bl">{t.label}</span>
+          <span class="bar"><span style="width:{Math.min(100, ((t.rr - 1) / 2) * 100)}%"></span></span>
+          <span class="small num bv">×{t.rr.toFixed(1)}</span>
+        </div>
+        <p class="small muted tb">{t.basis === 'generale' ? 'Da studi su persone con emicrania' : `Dai tuoi dati (${t.exposedDays} giorni) · tra ×${t.low.toFixed(1)} e ×${t.high.toFixed(1)}`}</p>
+      {/each}
+    </section>
+  {/if}
 
   {#if advice.some((a) => a.category !== 'urgente')}
     <h2>Consigli per te</h2>
@@ -212,5 +248,9 @@
   .bar { height: 10px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
   .bv { text-align: right; }
+  .goal { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
+  .goal .bar { display: block; }
+  .trig { grid-template-columns: 130px 1fr 44px; margin-top: 8px; }
+  .tb { margin: 2px 0 0; }
   .disclaimer { margin: 24px 0 12px; }
 </style>
