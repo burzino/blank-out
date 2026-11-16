@@ -13,6 +13,7 @@
   import Episode from './routes/Episode.svelte';
   import Calendar from './routes/Calendar.svelte';
   import Stats from './routes/Stats.svelte';
+  import Assistant from './routes/Assistant.svelte';
   import More from './routes/More.svelte';
   import Meds from './routes/Meds.svelte';
   import Prophylaxis from './routes/Prophylaxis.svelte';
@@ -35,6 +36,7 @@
   const tabs = [
     { path: '/', label: 'Oggi', icon: 'home' },
     { path: '/calendar', label: 'Calendario', icon: 'calendar' },
+    { path: '/assistant', label: 'Assistente', icon: 'spark' },
     { path: '/stats', label: 'Statistiche', icon: 'chart' },
     { path: '/more', label: 'Altro', icon: 'more' }
   ];
@@ -44,6 +46,7 @@
     '/episode': Episode,
     '/calendar': Calendar,
     '/stats': Stats,
+    '/assistant': Assistant,
     '/more': More,
     '/meds': Meds,
     '/prophylaxis': Prophylaxis,
@@ -91,7 +94,7 @@
 <style>
   .tabbar {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-    display: grid; grid-template-columns: repeat(4, 1fr);
+    display: grid; grid-template-columns: repeat(5, 1fr);
     background: var(--surface); border-top: 1px solid var(--border);
     padding-bottom: env(safe-area-inset-bottom);
   }

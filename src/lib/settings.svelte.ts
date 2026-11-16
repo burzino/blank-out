@@ -9,6 +9,9 @@ export interface Settings {
   trackCycle: boolean;
   lastBackupAt: string | null;
   lastReminderDate: string | null;
+  weatherEnabled: boolean;
+  weatherLat: number | null;
+  weatherLon: number | null;
 }
 
 const KEY = 'blankout.settings';
@@ -22,7 +25,10 @@ const defaults: Settings = {
   reminderTime: '21:00',
   trackCycle: false,
   lastBackupAt: null,
-  lastReminderDate: null
+  lastReminderDate: null,
+  weatherEnabled: false,
+  weatherLat: null,
+  weatherLon: null
 };
 
 function load(): Settings {
