@@ -58,7 +58,8 @@
   }
 
   // ---- Import ----
-  let pending = $state<BackupFile | null>(null);
+  // raw: il backup va passato a IndexedDB così com'è (un proxy $state darebbe DataCloneError)
+  let pending = $state.raw<BackupFile | null>(null);
   let importError = $state('');
   let fileInput: HTMLInputElement;
 
@@ -81,7 +82,13 @@
   async function confirmImport() {
     if (!pending) return;
     const b = pending;
-    await importBackup(b);
+    try {
+      await importBackup(b);
+    } catch {
+      importError = 'Ripristino non riuscito: il file è danneggiato. I dati attuali non sono stati modificati.';
+      pending = null;
+      return;
+    }
     if (b.settings) replaceSettings({ ...(b.settings as Partial<Settings>), onboarded: true });
     pending = null;
     haptic(20);
@@ -103,6 +110,7 @@
     haptic(30);
     toast('Tutti i dati sono stati cancellati');
   }
+  import DriveSync from '../components/DriveSync.svelte';
 </script>
 
 <div class="page fade">
@@ -111,6 +119,8 @@
   <p class="small muted">
     {settings.lastBackupAt ? `Ultimo backup: ${fmtDateTime(settings.lastBackupAt)}` : 'Non hai ancora fatto un backup.'}
   </p>
+
+  <DriveSync />
 
   <section class="card">
     <h3 style="margin-top:0">Backup completo</h3>

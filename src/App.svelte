@@ -4,6 +4,7 @@
   import { applySettings, settings } from './lib/settings.svelte';
   import { data, loadAll } from './lib/db.svelte';
   import { startReminders } from './lib/reminders';
+  import { startAutoBackup } from './lib/drive.svelte';
   import Icon from './components/Icon.svelte';
   import Toasts from './components/Toasts.svelte';
   import Lock from './components/Lock.svelte';
@@ -25,7 +26,10 @@
 
   applySettings();
   onMount(() => {
-    loadAll().then(startReminders);
+    loadAll().then(() => {
+      startReminders();
+      startAutoBackup();
+    });
   });
 
   const tabs = [
@@ -51,6 +55,8 @@
     '/info': Info
   };
   const Page = $derived(routes[route.path] ?? Home);
+  // Le pagine leggono route.params all'avvio: se cambia solo la query vanno ricreate
+  const pageKey = $derived(route.path + '?' + route.params.toString());
   const activeTab = $derived(
     tabs.find((t) => t.path === route.path)?.path ??
       (['/episode', '/log'].includes(route.path) ? '/' : '/more')
@@ -65,7 +71,7 @@
   <Onboarding />
 {:else}
   <main>
-    {#key route.path}
+    {#key pageKey}
       <Page />
     {/key}
   </main>

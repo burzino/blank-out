@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AURAS, AUTONOMIC, CLASSIFY_NOTE, DISABILITY, EFFICACY, LEVEL_LABEL, LOCATIONS, QUALITIES, SIDES, SYMPTOMS, classLabel, intensityLevel, type Opt } from '../lib/catalog';
+  import { AURAS, AUTONOMIC, CLASSIFY_NOTE, DISABILITY, EFFICACY, LEVEL_LABEL, LOCATIONS, QUALITIES, SIDES, SYMPTOMS, TRIGGERS, classLabel, intensityLevel, type Opt } from '../lib/catalog';
   import { classify, durationMin, formatDuration } from '../lib/clinic';
   import { addCustomTrigger, getEpisode, saveEpisode } from '../lib/db.svelte';
   import { clock, intakeFrom, rankedTriggers, redFlagFor, rememberMed, removeEpisode } from '../lib/episodes.svelte';
@@ -24,6 +24,8 @@
     lastJson = json;
     clearTimeout(timer);
     timer = setTimeout(async () => {
+      // Se nel frattempo l'episodio è stato annullato/eliminato (toast "Annulla"), non lo ricreo
+      if (!getEpisode(id)) return;
       await saveEpisode(JSON.parse(json));
       saved = true;
       setTimeout(() => (saved = false), 1500);
@@ -54,8 +56,11 @@
   async function addTrigger() {
     const t = newTrigger.trim();
     if (!t || !ep) return;
-    await addCustomTrigger(t);
-    if (!ep.triggers.includes(t)) ep.triggers.push(t);
+    // Se coincide con una voce del catalogo usa il suo id (niente doppioni né chiavi duplicate)
+    const known = TRIGGERS.find((o) => o.id === t || o.label.toLowerCase() === t.toLowerCase());
+    const tid = known?.id ?? t;
+    if (!known) await addCustomTrigger(t);
+    if (!ep.triggers.includes(tid)) ep.triggers.push(tid);
     newTrigger = '';
   }
   async function addMed(m: Parameters<typeof intakeFrom>[0]) {
@@ -84,21 +89,25 @@
     <p class="small muted saved" aria-live="polite">{saved ? 'Salvato' : ' '}</p>
 
     {#if flag}
-      <div class="alert danger"><strong>{flag}</strong><a href="#/redflags">Controlla i segnali d'allarme</a></div>
+      <div class="alert danger"><strong>{flag}</strong><a href={'#/redflags?id=' + ep.id}>Controlla i segnali d'allarme</a></div>
     {/if}
 
     <section class="card">
       <h3 style="margin-top:0">Orari</h3>
       <div class="field">
         <label for="start">Inizio</label>
-        <input id="start" type="datetime-local" value={toLocal(ep.start)} max={toLocal(new Date().toISOString())} onchange={(e) => ep && (ep.start = fromLocal(e.currentTarget.value))} />
+        <input id="start" type="datetime-local" value={toLocal(ep.start)} max={toLocal(new Date().toISOString())} onchange={(e) => ep && e.currentTarget.value && (ep.start = fromLocal(e.currentTarget.value))} />
       </div>
       {#if ep.end}
         <div class="field">
           <label for="end">Fine</label>
-          <input id="end" type="datetime-local" value={toLocal(ep.end)} min={toLocal(ep.start)} max={toLocal(new Date().toISOString())} onchange={(e) => ep && (ep.end = fromLocal(e.currentTarget.value))} />
+          <input id="end" type="datetime-local" value={toLocal(ep.end)} min={toLocal(ep.start)} max={toLocal(new Date().toISOString())} onchange={(e) => ep && e.currentTarget.value && (ep.end = fromLocal(e.currentTarget.value))} />
         </div>
-        <p class="small muted">Durata: {formatDuration(durationMin(ep))}</p>
+        {#if ep.end < ep.start}
+          <p class="small warn" role="alert">La fine è prima dell'inizio: correggi l'orario.</p>
+        {:else}
+          <p class="small muted">Durata: {formatDuration(durationMin(ep))}</p>
+        {/if}
         <button class="btn link" onclick={() => ep && (ep.end = null)}>È ancora in corso</button>
       {:else}
         <p class="small muted">In corso da {formatDuration(durationMin(ep, clock.now))}</p>
@@ -179,7 +188,7 @@
             <button class="btn ghost" aria-label="Rimuovi {m.name}" onclick={() => ep && ep.meds.splice(i, 1)}>✕</button>
           </div>
           <div class="row">
-            <input type="datetime-local" aria-label="Ora" value={toLocal(m.time)} onchange={(e) => (m.time = fromLocal(e.currentTarget.value))} />
+            <input type="datetime-local" aria-label="Ora" value={toLocal(m.time)} onchange={(e) => e.currentTarget.value && (m.time = fromLocal(e.currentTarget.value))} />
             <input type="text" aria-label="Dose" placeholder="Dose" style="width:40%" bind:value={m.dose} />
           </div>
           <span class="label">Effetto dopo 2 ore</span>
@@ -187,6 +196,8 @@
           <label class="check"><input type="checkbox" bind:checked={m.recurrence24h} /> Il dolore è tornato entro 24 h</label>
         </div>
       {/each}
+      <span class="label">{ep.meds.length ? 'Aggiungi un altro farmaco' : 'Tocca un farmaco per registrarlo adesso'}</span>
+      <div style="height:8px"></div>
       <MedPicker onpick={addMed} limit={4} />
     </section>
 
@@ -210,7 +221,7 @@
       </section>
     {/if}
 
-    <a class="btn link block" href="#/redflags">Questo mal di testa è diverso dal solito?</a>
+    <a class="btn link block" href={'#/redflags?id=' + ep.id}>Questo mal di testa è diverso dal solito?</a>
     <button class="btn block ghost danger" onclick={del}>Elimina episodio</button>
   {/if}
 </div>
@@ -221,6 +232,7 @@
   .n { padding: 0; text-align: center; border-radius: var(--radius-sm); }
   .n[aria-pressed='true']::before { content: ''; }
   .med { border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .warn { color: var(--i3); font-weight: 600; }
   .check { display: flex; gap: 10px; align-items: center; min-height: 48px; }
   .check input { width: 22px; height: 22px; }
   .danger { color: var(--i3); margin-top: 8px; }

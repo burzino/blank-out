@@ -5,16 +5,18 @@ import type { Episode } from './types';
 
 /** Farmaci sintomatici più comuni, proposti per primi. */
 export const COMMON_ACUTE_NAMES = [
-  'Ibuprofene',
-  'Paracetamolo',
-  'Ketoprofene',
+  'Oki (ketoprofene)',
+  'Oki Task (ketoprofene)',
+  'Ketodol (ketoprofene)',
+  'Moment (ibuprofene)',
+  'Moment Act (ibuprofene)',
+  'Tachipirina 500 (paracetamolo)',
+  'Tachipirina 1000 (paracetamolo)',
+  'Diclofenac',
   'Sumatriptan',
   'Rizatriptan',
   'Almotriptan',
-  'Eletriptan',
-  'Zolmitriptan',
-  'Naprossene',
-  'Acido acetilsalicilico'
+  'Eletriptan'
 ];
 
 export const COMMON_ACUTE = COMMON_ACUTE_NAMES.map((n) => KNOWN_ACUTE.find((k) => k.name === n)!).filter(Boolean);

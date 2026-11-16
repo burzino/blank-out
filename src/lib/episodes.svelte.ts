@@ -99,7 +99,9 @@ export function knownMedClass(name: string): MedClass | undefined {
 
 /** Trigger: catalogo + personalizzati, ordinati per frequenza recente. */
 export function rankedTriggers(): Opt[] {
-  const all: Opt[] = [...TRIGGERS, ...data.customTriggers.map((t) => ({ id: t, label: t }))];
+  const all: Opt[] = [...TRIGGERS];
+  // Niente id duplicati (chiavi degli #each): un trigger personalizzato può coincidere con un id del catalogo
+  for (const t of data.customTriggers) if (!all.some((o) => o.id === t)) all.push({ id: t, label: t });
   const ranking = rankRecent(data.episodes, (e) => e.triggers);
   const pos = (o: Opt) => {
     const i = ranking.indexOf(o.id);

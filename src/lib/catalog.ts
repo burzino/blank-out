@@ -151,6 +151,15 @@ export const mohGroup = (c: string) => MED_CLASSES.find((m) => m.id === c)?.moh 
 
 // Farmaci sintomatici comuni in Italia (nome generico → classe, dose tipica)
 export const KNOWN_ACUTE: { name: string; cls: MedClass; dose: string }[] = [
+  // Nomi commerciali più usati in Italia (principio attivo tra parentesi)
+  { name: 'Oki (ketoprofene)', cls: 'fans', dose: '80 mg' },
+  { name: 'Oki Task (ketoprofene)', cls: 'fans', dose: '40 mg' },
+  { name: 'Ketodol (ketoprofene)', cls: 'fans', dose: '1 bustina' },
+  { name: 'Moment (ibuprofene)', cls: 'fans', dose: '200 mg' },
+  { name: 'Moment Act (ibuprofene)', cls: 'fans', dose: '400 mg' },
+  { name: 'Tachipirina 500 (paracetamolo)', cls: 'paracetamolo', dose: '500 mg' },
+  { name: 'Tachipirina 1000 (paracetamolo)', cls: 'paracetamolo', dose: '1000 mg' },
+  { name: 'Voltaren (diclofenac)', cls: 'fans', dose: '50 mg' },
   { name: 'Ibuprofene', cls: 'fans', dose: '400 mg' },
   { name: 'Ketoprofene', cls: 'fans', dose: '50 mg' },
   { name: 'Naprossene', cls: 'fans', dose: '550 mg' },

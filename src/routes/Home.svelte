@@ -10,8 +10,12 @@
   import LogSheet from '../components/LogSheet.svelte';
   import MedPicker from '../components/MedPicker.svelte';
   import Sheet from '../components/Sheet.svelte';
+  import { drive, reauth } from '../lib/drive.svelte';
 
-  let logOpen = $state(route.path === '/log');
+  // Scorciatoia #/log: apre lo sheet una volta sola (tornando indietro non deve riaprirlo)
+  // e non apre un secondo episodio se ce n'è già uno in corso
+  let logOpen = $state(route.path === '/log' && !activeEpisode());
+  if (route.path === '/log') history.replaceState(history.state, '', '#/');
   let copyFrom = $state<Episode | undefined>();
   let medOpen = $state(false);
 
@@ -85,7 +89,7 @@
         <p class="small" style="margin-top:12px">È ancora in corso? Se è finito da tempo, imposta l'ora corretta nei dettagli.</p>
       {/if}
       <div class="stack" style="margin-top:16px">
-        <button class="btn primary big block" onclick={() => endEpisode(active, () => go('/episode?id=' + active.id))}>È finito</button>
+        <button class="btn primary big block" onclick={() => { const a = active; endEpisode(a, () => go('/episode?id=' + a.id)); }}>È finito</button>
         <div class="row">
           <button class="btn grow" onclick={() => (medOpen = true)}>Ho preso un farmaco</button>
           <a class="btn grow" href={'#/episode?id=' + active.id}>Dettagli</a>
@@ -96,6 +100,19 @@
     <p class="muted lead">
       {#if since === null}Nessun episodio registrato.{:else if since === 0}Ultimo mal di testa: oggi.{:else}Nessun mal di testa da <strong class="num">{since}</strong> {since === 1 ? 'giorno' : 'giorni'}.{/if}
     </p>
+    <div class="cta">
+      <button class="btn primary big block huge" onclick={() => openLog()}>Ho mal di testa</button>
+      <div class="row">
+        {#if last}<button class="btn link grow" onclick={() => openLog(last)}>Come l'ultima volta</button>{/if}
+        <button class="btn link grow" onclick={() => (medOpen = true)}>Ho preso un farmaco</button>
+      </div>
+    </div>
+  {/if}
+
+  {#if drive.enabled && drive.needsReauth}
+    <button class="card nav sync" onclick={() => reauth()}>
+      <span class="grow">Backup in sospeso · <strong>tocca per sincronizzare</strong></span><span aria-hidden="true">›</span>
+    </button>
   {/if}
 
   {#each pending as p (p.med.id)}
@@ -121,10 +138,10 @@
   {/if}
 
   {#each alerts as a (a.id)}
-    <section class="alert" class:danger={a.level === 'danger'}>
-      <strong>{a.title}</strong>
-      <span class="small">{a.text}</span>
-    </section>
+    <details class="alert" class:danger={a.level === 'danger'}>
+      <summary><strong>{a.title}</strong><span class="small more">Leggi</span></summary>
+      <p class="small" style="margin:8px 0 0">{a.text}</p>
+    </details>
   {/each}
 
   <section class="card">
@@ -151,14 +168,6 @@
     <a class="card nav" href="#/backup"><span class="grow">Fai un backup dei tuoi dati</span><span aria-hidden="true">›</span></a>
   {/if}
 
-  {#if !active}
-    <div class="cta">
-      <button class="btn primary big block huge" onclick={() => openLog()}>Ho mal di testa</button>
-      {#if last}
-        <button class="btn link block" onclick={() => openLog(last)}>Come l'ultima volta</button>
-      {/if}
-    </div>
-  {/if}
 
   <a class="btn link block" href="#/redflags">Segnali d'allarme: quando chiamare il medico</a>
 </div>
@@ -176,7 +185,7 @@
 </Sheet>
 
 <style>
-  .lead { font-size: 1.1rem; margin-bottom: 20px; }
+  .lead { font-size: 1.1rem; margin-bottom: 16px; }
   .badge { padding: 4px 12px; border-radius: 999px; font-weight: 700; }
   .between { justify-content: space-between; }
   .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0; }
@@ -184,7 +193,16 @@
   .kpi { font-size: 2rem; font-weight: 700; line-height: 1.1; }
   .strip { display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; }
   .cell { aspect-ratio: 1; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border); }
-  .cta { margin: 24px 0 8px; }
+  .cell.i1 { background: var(--i1); border-color: var(--i1); }
+  .cell.i2 { background: var(--i2); border-color: var(--i2); }
+  .cell.i3 { background: var(--i3); border-color: var(--i3); }
+  details summary { list-style: none; display: flex; align-items: center; gap: 8px; cursor: pointer; min-height: 32px; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary strong { margin: 0; flex: 1; }
+  .more { color: var(--accent); }
+  details[open] .more { display: none; }
+  .sync { width: 100%; text-align: left; font: inherit; color: var(--text); cursor: pointer; }
+  .cta { margin: 0 0 24px; }
   .huge { min-height: 88px; font-size: 1.35rem; }
   .nav { display: flex; align-items: center; text-decoration: none; color: var(--text); min-height: 56px; }
 </style>

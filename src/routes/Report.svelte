@@ -140,7 +140,7 @@
     <!-- 3. Metriche per mese -->
     <section>
       <h2>Metriche</h2>
-      <table>
+      <div class="tw"><table>
         <thead>
           <tr>
             <th>Mese</th><th class="r">Gg cefalea</th><th class="r">Gg emicrania</th><th class="r">Gg sintomatici</th><th>per classe</th><th class="r">Int. media</th><th class="r">Durata media</th><th class="r">Gg a letto</th>
@@ -172,7 +172,7 @@
             <td class="r">{fmt1(s.per30(s.bedDays))}</td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </section>
 
     <div class="cols">
@@ -180,7 +180,7 @@
       <section>
         <h2>Farmaci sintomatici</h2>
         {#if s.efficacy.length}
-          <table>
+          <div class="tw"><table>
             <thead><tr><th>Farmaco</th><th class="r">Gg/30</th><th class="r">Risposta completa 2 h</th><th class="r">Recidiva 24 h</th></tr></thead>
             <tbody>
               {#each s.efficacy as r (r.name)}
@@ -192,7 +192,7 @@
                 </tr>
               {/each}
             </tbody>
-          </table>
+          </table></div>
         {:else}
           <p class="muted">Nessun sintomatico registrato.</p>
         {/if}
@@ -265,7 +265,7 @@
     <section>
       <h2>Profilassi</h2>
       {#if proph.length}
-        <table>
+        <div class="tw"><table>
           <thead><tr><th>Farmaco</th><th>Dose</th><th>Date</th><th>Stop / effetti collaterali</th><th class="r">Gg emicrania/30 prima → dopo</th><th class="r">Var.</th><th>Responder</th></tr></thead>
           <tbody>
             {#each proph as { p, r, current } (p.id)}
@@ -282,7 +282,7 @@
               </tr>
             {/each}
           </tbody>
-        </table>
+        </table></div>
       {:else}
         <p class="muted">Nessuna profilassi registrata.</p>
       {/if}
@@ -325,6 +325,8 @@
   ul { margin: 0; padding-left: 14px; }
   li { margin: 1px 0; }
   .strong { font-weight: 700; }
+  .tw { overflow-x: auto; }
+  @media print { .tw { overflow: visible; } }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--border); padding: 1px 4px 1px 0; vertical-align: bottom; }
   td { padding: 1px 4px 1px 0; border-bottom: 1px solid var(--border); vertical-align: top; }

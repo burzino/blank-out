@@ -193,13 +193,21 @@ export async function importBackup(b: BackupFile) {
   const stores = ['episodes', 'medications', 'prophylaxis', 'questionnaires', 'days', 'meta'] as const;
   const tx = d.transaction(stores, 'readwrite');
   await Promise.all(stores.map((s) => tx.objectStore(s).clear()));
-  for (const e of b.episodes) tx.objectStore('episodes').put(e);
-  for (const m of b.medications ?? []) tx.objectStore('medications').put(m);
-  for (const p of b.prophylaxis ?? []) tx.objectStore('prophylaxis').put(p);
-  for (const q of b.questionnaires ?? []) tx.objectStore('questionnaires').put(q);
-  for (const day of b.days ?? []) tx.objectStore('days').put(day);
-  tx.objectStore('meta').put(b.customTriggers ?? [], 'customTriggers');
-  tx.objectStore('meta').put(b.profile ?? {}, 'profile');
+  // put() può lanciare in modo sincrono (DataCloneError su proxy, DataError su record senza id):
+  // senza abort la transazione verrebbe comunque confermata, con i dati già cancellati.
+  try {
+    for (const e of b.episodes) tx.objectStore('episodes').put({ ...newEpisode(), ...e });
+    for (const m of b.medications ?? []) tx.objectStore('medications').put(m);
+    for (const p of b.prophylaxis ?? []) tx.objectStore('prophylaxis').put(p);
+    for (const q of b.questionnaires ?? []) tx.objectStore('questionnaires').put(q);
+    for (const day of b.days ?? []) tx.objectStore('days').put(day);
+    tx.objectStore('meta').put(b.customTriggers ?? [], 'customTriggers');
+    tx.objectStore('meta').put(b.profile ?? {}, 'profile');
+  } catch (err) {
+    tx.done.catch(() => {});
+    tx.abort();
+    throw err;
+  }
   await tx.done;
   await loadAll();
 }
