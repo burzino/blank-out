@@ -3,7 +3,7 @@
   import { data } from '../lib/db.svelte';
   import {
     applyRestore,
-    backupNow,
+    backupFromTap,
     connectGoogle,
     disconnect,
     drive,
@@ -72,8 +72,12 @@
 
   async function runNow() {
     haptic();
-    const ok = await backupNow();
-    if (ok) toast('Backup salvato su Google Drive');
+    try {
+      const ok = await backupFromTap();
+      if (ok) toast('Backup salvato su Google Drive');
+    } catch {
+      toast('Collegamento a Google non completato');
+    }
   }
 
   async function relink() {

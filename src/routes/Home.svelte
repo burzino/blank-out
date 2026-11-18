@@ -130,7 +130,7 @@
   {/if}
 
   {#if drive.enabled && drive.needsReauth}
-    <button class="card nav sync" onclick={() => reauth()}>
+    <button class="card nav sync" onclick={() => reauth().then((ok) => ok && toast('Backup salvato su Google Drive'), () => toast('Collegamento a Google non completato'))}>
       <span class="grow">Backup in sospeso · <strong>tocca per sincronizzare</strong></span><span aria-hidden="true">›</span>
     </button>
   {/if}

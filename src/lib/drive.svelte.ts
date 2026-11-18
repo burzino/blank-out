@@ -1,5 +1,8 @@
 // Backup automatico cifrato su Google Drive (cartella nascosta appDataFolder), senza server nostri.
-// Token OAuth solo in memoria (~1 h); la chiave AES resta sul dispositivo (vedi crypto.ts).
+// Token OAuth (~1 h, scope limitato ad appDataFolder) salvato in localStorage per sopravvivere ai riavvii della PWA;
+// la chiave AES resta sul dispositivo (vedi crypto.ts).
+// Il popup di Google si apre solo da un tocco dell'utente: senza token valido il backup resta in sospeso
+// e la Home mostra "Ricollega Google".
 import { untrack } from 'svelte';
 import { GOOGLE_CLIENT_ID } from './config';
 import { clearLocalKey, decryptJson, deriveKey, encryptJson, isEncryptedFile, loadLocalKey, MIN_PASSWORD, newSalt, saveLocalKey } from './crypto';
@@ -38,6 +41,7 @@ const KEEP_DAILY = 7;
 const DEBOUNCE_MS = 20_000;
 const STALE_MS = 24 * 3600_000;
 const LS_KEY = 'blankout.drive';
+const LS_TOKEN = 'blankout.drive.token';
 
 // ---- Stato reattivo (persistito senza token) ----
 interface Persisted {
@@ -99,8 +103,21 @@ export function prepareGoogle(): Promise<void> {
 }
 
 // ---- Token ----
-let token: { value: string; exp: number } | null = null;
+let token: { value: string; exp: number } | null = (() => {
+  try {
+    return JSON.parse(localStorage.getItem(LS_TOKEN) ?? 'null');
+  } catch {
+    return null;
+  }
+})();
 const tokenValid = () => !!token && Date.now() < token.exp - 60_000;
+function setToken(t: typeof token) {
+  token = t;
+  try {
+    if (t) localStorage.setItem(LS_TOKEN, JSON.stringify(t));
+    else localStorage.removeItem(LS_TOKEN);
+  } catch {}
+}
 
 class ReauthError extends Error {
   constructor() {
@@ -110,7 +127,14 @@ class ReauthError extends Error {
 
 // Apre il flusso GIS. Se GIS è già caricato, requestAccessToken parte in modo sincrono:
 // importante perché il popup deve nascere dentro il gesto dell'utente.
+// Una sola richiesta alla volta: tocchi ripetuti o flussi paralleli condividono lo stesso popup.
+let tokenP: Promise<string> | null = null;
 function requestToken(prompt: '' | 'consent'): Promise<string> {
+  tokenP ??= openTokenFlow(prompt).finally(() => (tokenP = null));
+  return tokenP;
+}
+
+function openTokenFlow(prompt: '' | 'consent'): Promise<string> {
   const run = () =>
     new Promise<string>((resolve, reject) => {
       let done = false;
@@ -121,14 +145,14 @@ function requestToken(prompt: '' | 'consent'): Promise<string> {
         fn();
       };
       // Se l'utente abbandona il popup senza chiuderlo, GIS può non rispondere mai
-      const timer = setTimeout(() => finish(() => reject(new ReauthError())), prompt ? 180_000 : 30_000);
+      const timer = setTimeout(() => finish(() => reject(new ReauthError())), 180_000);
       const client = gis()!.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
         scope: SCOPE,
         prompt,
         callback: (r) => {
           if (r.error || !r.access_token) return finish(() => reject(new ReauthError()));
-          token = { value: r.access_token, exp: Date.now() + Number(r.expires_in ?? 3600) * 1000 };
+          setToken({ value: r.access_token, exp: Date.now() + Number(r.expires_in ?? 3600) * 1000 });
           finish(() => resolve(r.access_token!));
         },
         error_callback: () => finish(() => reject(new ReauthError())) // popup bloccato o chiuso
@@ -138,16 +162,12 @@ function requestToken(prompt: '' | 'consent'): Promise<string> {
   return gis() ? run() : prepareGoogle().then(run);
 }
 
-// Senza gesto dell'utente: usa il token in memoria o tenta un rinnovo silenzioso una sola volta.
+// Senza gesto dell'utente: solo il token salvato. Un rinnovo qui aprirebbe il popup di Google
+// "a caso" (timer, cambio app, ritorno online), quindi si chiede di ricollegare con un tocco.
 async function getToken(): Promise<string> {
   if (tokenValid()) return token!.value;
-  if (drive.needsReauth || !drive.connected) throw new ReauthError();
-  try {
-    return await requestToken('');
-  } catch {
-    drive.needsReauth = true;
-    throw new ReauthError();
-  }
+  if (tokenP) return tokenP; // popup già aperto da un tocco: si aspetta quello
+  throw new ReauthError();
 }
 
 /** Da chiamare dentro un click: primo collegamento (consenso) o ricollegamento. */
@@ -178,7 +198,7 @@ async function api(url: string, init: RequestInit = {}): Promise<Response> {
   const t = await getToken();
   const res = await fetch(url, { ...init, headers: { ...(init.headers ?? {}), Authorization: `Bearer ${t}` } });
   if (res.status === 401) {
-    token = null; // scaduto o revocato: al prossimo giro si rinnova
+    setToken(null); // scaduto o revocato: serve ricollegare
     throw new ReauthError();
   }
   if (!res.ok) throw new HttpError(res.status);
@@ -269,6 +289,12 @@ export function backupNow(): Promise<boolean> {
   return running;
 }
 
+/** Backup richiesto con un tocco: se il token è scaduto, il popup per ricollegare parte qui, dentro il gesto. */
+export async function backupFromTap(): Promise<boolean> {
+  if (!tokenValid()) await connectGoogle();
+  return backupNow();
+}
+
 async function doBackup(): Promise<boolean> {
   await keyLoaded;
   if (!drive.configured || !drive.enabled) return false;
@@ -322,6 +348,8 @@ export function startAutoBackup() {
   if (started || typeof window === 'undefined') return;
   started = true;
   let last: string | null = null;
+  // GIS pronto in anticipo: "Ricollega Google" in Home deve aprire il popup subito, dentro il tocco
+  if (drive.enabled && drive.connected) prepareGoogle().catch(() => {});
 
   $effect.root(() => {
     $effect(() => {
@@ -386,7 +414,7 @@ async function useKey(key: CryptoKey, salt: Uint8Array<ArrayBuffer>) {
 export async function disconnect() {
   clearTimeout(timer);
   const t = token?.value;
-  token = null;
+  setToken(null);
   ids = {};
   dirty = false;
   if (t) {
