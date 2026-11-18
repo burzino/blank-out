@@ -1,9 +1,11 @@
 <script lang="ts">
   import { dayKey } from '../lib/clinic';
   import { downloadFile, episodesCsv, intakesCsv } from '../lib/csv';
-  import { data, exportBackup, importBackup, isBackup, wipeAll } from '../lib/db.svelte';
+  import { addEpisodes, data, exportBackup, importBackup, isBackup, wipeAll } from '../lib/db.svelte';
+  import { rememberMed } from '../lib/episodes.svelte';
+  import { parseMigraineBuddy } from '../lib/migraineBuddy';
   import { replaceSettings, saveSettings, settings, type Settings } from '../lib/settings.svelte';
-  import type { BackupFile } from '../lib/types';
+  import type { BackupFile, Episode } from '../lib/types';
   import { haptic, toast } from '../lib/ui.svelte';
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
@@ -95,6 +97,49 @@
     toast('Dati ripristinati');
   }
 
+  // ---- Importa da Migraine Buddy ----
+  // Si aggiungono gli attacchi al diario, saltando quelli che iniziano nello stesso minuto di un episodio già presente.
+  let mbPending = $state.raw<{ add: Episode[]; dupes: number } | null>(null);
+  let mbError = $state('');
+  let mbInput: HTMLInputElement;
+  const minuteKey = (iso: string) => iso.slice(0, 16);
+  const fmtDay = (iso: string) => new Date(iso).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  async function onMbFile(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const f = input.files?.[0];
+    input.value = '';
+    mbError = '';
+    mbPending = null;
+    if (!f) return;
+    try {
+      const { episodes } = parseMigraineBuddy(await f.text());
+      const existing = new Set(data.episodes.map((x) => minuteKey(new Date(x.start).toISOString())));
+      const add = episodes.filter((x) => !existing.has(minuteKey(x.start)));
+      if (!episodes.length) mbError = 'Il file non contiene attacchi da importare.';
+      else mbPending = { add: add.sort((a, b) => a.start.localeCompare(b.start)), dupes: episodes.length - add.length };
+    } catch {
+      mbError = 'Questo file non sembra un’esportazione CSV di Migraine Buddy.';
+    }
+  }
+
+  async function confirmMbImport() {
+    if (!mbPending) return;
+    const { add } = mbPending;
+    try {
+      await addEpisodes(add);
+      const meds = new Map(add.flatMap((x) => x.meds).map((m) => [m.name.toLowerCase(), m]));
+      for (const m of meds.values()) await rememberMed({ name: m.name, cls: m.cls });
+    } catch {
+      mbError = 'Importazione non riuscita.';
+      mbPending = null;
+      return;
+    }
+    mbPending = null;
+    haptic(20);
+    toast(`${add.length} ${add.length === 1 ? 'attacco importato' : 'attacchi importati'}`);
+  }
+
   // ---- Cancella tutto ----
   let wipeOpen = $state(false);
   let wipeText = $state('');
@@ -161,6 +206,36 @@
           <button class="btn block danger-btn" onclick={confirmImport}>Sostituisci i dati attuali</button>
           <button class="btn block" onclick={() => (pending = null)}>Lascia stare</button>
         </div>
+      </div>
+    {/if}
+  </section>
+
+  <section class="card">
+    <h3 style="margin-top:0">Importa da Migraine Buddy</h3>
+    <p class="small muted">In Migraine Buddy esporta i dati in formato CSV, poi scegli qui il file. Gli attacchi vengono aggiunti al diario senza toccare quelli che hai già.</p>
+    <input bind:this={mbInput} type="file" accept="text/csv,.csv" class="hidden" onchange={onMbFile} />
+    {#if !mbPending}
+      <button class="btn block" onclick={() => mbInput.click()}><Icon name="upload" /> Scegli il file CSV…</button>
+    {/if}
+    {#if mbError}<p class="alert small" style="margin:12px 0 0">{mbError}</p>{/if}
+    {#if mbPending}
+      <div class="alert fade" style="margin:12px 0 0">
+        {#if mbPending.add.length}
+          <strong>{mbPending.add.length} {mbPending.add.length === 1 ? 'attacco da importare' : 'attacchi da importare'}</strong>
+          <p class="small">
+            Dal {fmtDay(mbPending.add[0].start)} al {fmtDay(mbPending.add[mbPending.add.length - 1].start)}.
+            {#if mbPending.dupes}{mbPending.dupes} già presenti nel diario verranno saltati.{/if}
+            Farmaci, zone, sintomi e trigger vengono convertiti; il resto finisce nelle note dell'episodio.
+          </p>
+          <div class="stack">
+            <button class="btn primary block" onclick={confirmMbImport}>Aggiungi al diario</button>
+            <button class="btn block" onclick={() => (mbPending = null)}>Lascia stare</button>
+          </div>
+        {:else}
+          <strong>Niente di nuovo</strong>
+          <p class="small">Tutti i {mbPending.dupes} attacchi del file sono già nel diario.</p>
+          <button class="btn block" onclick={() => (mbPending = null)}>Ok</button>
+        {/if}
       </div>
     {/if}
   </section>

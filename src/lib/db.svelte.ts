@@ -109,7 +109,17 @@ export async function deleteEpisode(id: string) {
   await del('episodes', id);
 }
 
-export const getEpisode = (id: string) => data.episodes.find((e) => e.id === id);
+/** Aggiunge più episodi in un'unica transazione (importazione da altre app). */
+export async function addEpisodes(list: Episode[]) {
+  const d = await db();
+  const tx = d.transaction('episodes', 'readwrite');
+  for (const e of list) tx.store.put($state.snapshot(e));
+  await tx.done;
+  data.episodes.push(...list);
+  data.episodes.sort(byStartDesc);
+}
+
+export const getEpisode =(id: string) => data.episodes.find((e) => e.id === id);
 export const activeEpisode = () => data.episodes.find((e) => e.end === null);
 
 // ---- Farmaci personali ----
