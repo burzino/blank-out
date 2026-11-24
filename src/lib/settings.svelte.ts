@@ -5,10 +5,13 @@ export interface Settings {
   haptics: boolean;
   onboarded: boolean;
   reminderEnabled: boolean;
-  reminderTime: string; // HH:MM
+  reminderTime: string; // HH:MM, promemoria serale (giornata + check-in della sera)
+  morningReminderEnabled: boolean; // promemoria del mattino: sonno nel check-in
+  morningReminderTime: string; // HH:MM
   trackCycle: boolean;
   lastBackupAt: string | null;
   lastReminderDate: string | null;
+  lastMorningReminderDate: string | null;
   weatherEnabled: boolean;
   weatherLat: number | null;
   weatherLon: number | null;
@@ -23,9 +26,12 @@ const defaults: Settings = {
   onboarded: false,
   reminderEnabled: false,
   reminderTime: '21:00',
+  morningReminderEnabled: false,
+  morningReminderTime: '08:30',
   trackCycle: false,
   lastBackupAt: null,
   lastReminderDate: null,
+  lastMorningReminderDate: null,
   weatherEnabled: false,
   weatherLat: null,
   weatherLon: null

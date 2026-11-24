@@ -29,7 +29,7 @@ export default defineConfig({
         ],
         shortcuts: [{ name: 'Registra mal di testa', short_name: 'Registra', url: './#/log' }]
       },
-      workbox: { globPatterns: ['**/*.{js,css,html,svg,png,woff2}'] }
+      workbox: { globPatterns: ['**/*.{js,css,html,svg,png,woff2}'], importScripts: ['sw-notify.js'] }
     })
   ],
   test: { environment: 'node', include: ['src/**/*.test.ts'] }

@@ -32,18 +32,53 @@ async function show(title: string, options: NotificationOptions) {
   } catch {}
 }
 
-/** Promemoria serale: una volta al giorno, dopo l'ora scelta, se oggi non è registrato nulla. */
+const minutes = (hhmm: string) => {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+};
+const nowMinutes = (now: Date) => now.getHours() * 60 + now.getMinutes();
+// Il promemoria del mattino ha senso solo nelle ore successive: aprendo l'app la sera non arriva più
+const MORNING_WINDOW = 4 * 60;
+
+/** Contenuto del promemoria serale, o null se oggi è già tutto registrato (giornata e check-in). */
+export function eveningMessage(now = new Date()): { title: string; body: string } | null {
+  const today = dayKey(now);
+  const day = getDay(today);
+  const loggedToday =
+    !!activeEpisode() || !!day?.headacheFree || data.episodes.some((e) => dayKey(e.start) === today || (e.end && dayKey(e.end) === today));
+  // Check-in della sera: lo stress è la riga che, con il sonno, segna il check-in come fatto
+  const checkinDone = !!day?.checkin?.stress;
+  if (loggedToday && checkinDone) return null;
+  if (loggedToday) return { title: 'Check-in della sera', body: 'Stress, pasti, movimento: bastano 10 secondi' };
+  if (checkinDone) return { title: 'Oggi tutto bene?', body: 'Tocca per registrare la giornata' };
+  return { title: 'Com’è andata oggi?', body: 'Completa il check-in e segna se hai avuto mal di testa' };
+}
+
+/** Promemoria serale: una volta al giorno, dopo l'ora scelta, se manca la giornata o il check-in. */
 export function checkDailyReminder(now = new Date()) {
   if (!settings.reminderEnabled || !granted() || !data.ready) return;
   const today = dayKey(now);
   if (settings.lastReminderDate === today) return;
-  const [h, m] = settings.reminderTime.split(':').map(Number);
-  if (now.getHours() * 60 + now.getMinutes() < h * 60 + m) return;
-  const loggedToday = !!activeEpisode() || data.episodes.some((e) => dayKey(e.start) === today || (e.end && dayKey(e.end) === today));
-  if (loggedToday || getDay(today)?.headacheFree) return;
+  if (nowMinutes(now) < minutes(settings.reminderTime)) return;
+  const msg = eveningMessage(now);
+  if (!msg) return;
   settings.lastReminderDate = today;
   saveSettings();
-  show('Oggi tutto bene?', { body: 'Tocca per registrare la giornata', tag: 'daily' });
+  show(msg.title, { body: msg.body, tag: 'daily' });
+}
+
+/** Promemoria del mattino: una volta al giorno, nelle ore dopo l'ora scelta, se il sonno non è ancora segnato. */
+export function checkMorningReminder(now = new Date()) {
+  if (!settings.morningReminderEnabled || !granted() || !data.ready) return;
+  const today = dayKey(now);
+  if (settings.lastMorningReminderDate === today) return;
+  const from = minutes(settings.morningReminderTime);
+  const t = nowMinutes(now);
+  if (t < from || t >= from + MORNING_WINDOW) return;
+  if (getDay(today)?.checkin?.sleep) return;
+  settings.lastMorningReminderDate = today;
+  saveSettings();
+  show('Come hai dormito?', { body: 'Segnalo nel check-in di oggi: basta un tocco', tag: 'morning' });
 }
 
 /** Una notifica per ogni farmaco preso da più di 2 ore senza valutazione dell'efficacia. */
@@ -58,6 +93,7 @@ export function notifyPendingEfficacy(now = new Date()) {
 
 function tick() {
   const now = new Date();
+  checkMorningReminder(now);
   checkDailyReminder(now);
   notifyPendingEfficacy(now);
 }
@@ -67,6 +103,7 @@ export function startReminders() {
   if (timer || typeof window === 'undefined') return;
   // Al primo avvio non notifichiamo i farmaci già in attesa: la Home li mostra già
   for (const { med } of pendingEfficacy(data.episodes)) notifiedMeds.add(med.id);
+  checkMorningReminder();
   checkDailyReminder();
   timer = setInterval(tick, 60000);
 }

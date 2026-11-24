@@ -23,6 +23,7 @@
   async function setReminder(on: boolean) {
     haptic();
     settings.reminderEnabled = on;
+    settings.morningReminderEnabled = on;
     saveSettings();
     if (on) await requestNotifications();
   }
@@ -72,15 +73,19 @@
           {/each}
         </div>
       {:else if step === 2}
-        <h1>Vuoi un promemoria serale?</h1>
-        <p class="muted">Una domanda veloce la sera: "Oggi tutto bene?". Aiuta a non dimenticare nulla.</p>
+        <h1>Vuoi dei promemoria?</h1>
+        <p class="muted">Al mattino per segnare come hai dormito, la sera per il check-in e "Oggi tutto bene?". Aiutano a non dimenticare nulla.</p>
         <div class="seg">
           <button class="chip" aria-pressed={settings.reminderEnabled} onclick={() => setReminder(true)}>Sì</button>
           <button class="chip" aria-pressed={!settings.reminderEnabled} onclick={() => setReminder(false)}>No</button>
         </div>
         {#if settings.reminderEnabled}
           <div class="field fade" style="margin-top:12px">
-            <label for="ob-time">A che ora?</label>
+            <label for="ob-mtime">Mattino</label>
+            <input id="ob-mtime" type="time" value={settings.morningReminderTime} onchange={(e) => { if (e.currentTarget.value) { settings.morningReminderTime = e.currentTarget.value; saveSettings(); } }} />
+          </div>
+          <div class="field fade" style="margin-top:12px">
+            <label for="ob-time">Sera</label>
             <input id="ob-time" type="time" value={settings.reminderTime} onchange={(e) => { if (e.currentTarget.value) { settings.reminderTime = e.currentTarget.value; saveSettings(); } }} />
           </div>
         {/if}
