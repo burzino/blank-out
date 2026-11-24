@@ -2,3 +2,9 @@ node_modules
 dist
 dev-dist
 *.log
+
+# Dati personali esportati (es. Migraine Buddy) e variabili locali
+*.csv
+.env
+.env.*
+!.env.example
