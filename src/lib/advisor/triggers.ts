@@ -1,9 +1,9 @@
 // Fattori di rischio personali stimati con i giorni di check-in come confronto (giorni con e senza il fattore).
 // Approccio bayesiano: il log del rischio relativo ha un prior normale centrato sui valori della letteratura;
 // i dati dell'utente lo aggiornano (media pesata per la precisione). Pochi dati → resta vicino alla letteratura.
-import { PRODROMES, labelOf } from '../catalog';
+import { PRODROMES, activityOf, flagOf, labelOf } from '../catalog';
 import { addDays, dayKey, daysBetween, keyToDate, periodStarts, rangeKeys } from '../clinic';
-import type { CheckIn, Episode } from '../types';
+import type { CheckIn, CheckInField, Episode } from '../types';
 import type { AdvisorContext, TriggerRisk, WeatherDay } from './types';
 
 // ---------- Prior dalla letteratura (ordini di grandezza, non valori esatti) ----------
@@ -21,12 +21,25 @@ import type { AdvisorContext, TriggerRisk, WeatherDay } from './types';
 // - Caffeina: Mostofsky et al., Am J Med 2019 (≥3 porzioni: OR ~1.4); astinenza da caffeina ~1.2-1.5.
 // - Alcol: Panconesi 2008 (rassegna); Vives-Mestres et al., Headache 2019 → RR ~1.3-1.6, soprattutto il giorno dopo.
 // - Attività fisica regolare: protettiva (Varkey et al., Cephalalgia 2011; Lemmens 2019) → RR ~0.8,
-//   quindi "niente movimento" ~1.15-1.25.
+//   quindi "niente movimento" ~1.15-1.25. Il confronto è nessuno vs moderato/intenso (il leggero è escluso).
+// - Sforzo intenso o insolito: trigger acuto riferito da ~20-40% dei pazienti (Kelman, Cephalalgia 2007;
+//   Koppen & van Veldhoven, J Headache Pain 2013), di solito nelle ore successive → RR ~1.3, prior largo
+//   perché varia molto da persona a persona (e chi si allena con regolarità ne soffre meno).
 // - Calo di pressione: Kimoto et al., Headache 2011; Okuma et al., SpringerPlus 2015 → RR ~1.2-1.4.
 // - Weekend: Couturier et al., Cephalalgia 1992 ("emicrania del weekend") → effetto modesto ~1.1.
+// - Orari del sonno irregolari (letto/sveglia diversi dal solito, "lie-in" del weekend): non esiste un RR diretto
+//   affidabile. Kelman, Cephalalgia 2007 (disturbi/cambi del sonno riferiti come trigger da ~50%); Houle et al.,
+//   Headache 2012 e Bertisch et al., Neurology 2020 (sonno della notte prima → attacco il giorno dopo); la
+//   "emicrania del weekend" di Couturier 1992 è attribuita in parte allo spostamento degli orari → per analogia
+//   ~1.2-1.4: prior 1.3 con sd 0.4 (ordine di grandezza).
+// - Schermi / luce forte: la luce è riferita come trigger da ~38% (Kelman, Cephalalgia 2007), ma le prove di
+//   provocazione la confermano raramente (Hougaard et al., Neurology 2013); più ore di schermo associate a più
+//   emicrania in uno studio trasversale (Montagni et al., Cephalalgia 2016, OR ~1.4) → prior debole 1.15, sd 0.45.
 export const LIT: Record<string, { rr: number; sd: number; label: string }> = {
   sleep_poco: { rr: 1.6, sd: 0.35, label: 'Dormire poco' },
   sleep_troppo: { rr: 1.3, sd: 0.4, label: 'Dormire troppo' },
+  sleep_irregolare: { rr: 1.3, sd: 0.4, label: 'Orari di sonno diversi dal solito' },
+  screens: { rr: 1.15, sd: 0.45, label: 'Molte ore di schermo o luce forte' },
   stress_alto: { rr: 1.5, sd: 0.4, label: 'Stress alto' },
   meals_saltato: { rr: 1.5, sd: 0.4, label: 'Saltare un pasto' },
   water_poca: { rr: 1.2, sd: 0.4, label: 'Bere poca acqua' },
@@ -34,6 +47,7 @@ export const LIT: Record<string, { rr: number; sd: number; label: string }> = {
   caffeine_meno: { rr: 1.3, sd: 0.4, label: 'Meno caffè del solito' },
   alcohol: { rr: 1.4, sd: 0.4, label: 'Alcol' },
   no_exercise: { rr: 1.2, sd: 0.3, label: 'Niente movimento' },
+  exercise_intensa: { rr: 1.3, sd: 0.45, label: 'Sforzo fisico intenso' },
   prodrome: { rr: 3.0, sd: 0.5, label: 'Segnali premonitori' },
   perimenstrual: { rr: 2.0, sd: 0.35, label: 'Giorni intorno al ciclo' },
   pressure_drop: { rr: 1.25, sd: 0.3, label: 'Calo di pressione' },
@@ -52,7 +66,11 @@ export interface Timeline {
   idx: Map<string, number>;
   today: number; // indice di oggi
   start: Uint8Array; // 1 se quel giorno inizia almeno un attacco
-  checkin: (CheckIn | undefined)[];
+  checkin: (CheckIn | undefined)[]; // check-in così come salvato (per mostrare i fattori di oggi)
+  /** Check-in "usabile come esposizione" per i modelli: chip sì/no risolti con flagOf, movimento con activityOf,
+   *  fattori della giornata registrati dopo l'inizio di un attacco dello stesso giorno tolti (vedi exposureOf). */
+  exposure: (CheckIn | undefined)[];
+  startAt: Float64Array; // ms del primo attacco iniziato quel giorno (NaN se nessuno)
   duringAttack: Uint8Array; // 1 se il check-in è stato compilato durante un attacco già iniziato
   med: Uint8Array; // 1 se quel giorno è stato preso un sintomatico (antiemetici esclusi)
   peri: Int8Array; // 1 finestra perimestruale, 0 no, −1 sconosciuto
@@ -79,11 +97,14 @@ export function buildTimeline(ctx: AdvisorContext): Timeline {
   const n = keys.length;
   const start = new Uint8Array(n);
   const med = new Uint8Array(n);
+  const startAt = new Float64Array(n).fill(NaN);
   const byDay = new Map<number, Episode[]>();
   for (const e of valid) {
     const i = idx.get(dayKey(e.start));
     if (i !== undefined) {
       start[i] = 1;
+      const s = new Date(e.start).getTime();
+      if (!(startAt[i] <= s)) startAt[i] = s;
       if (!byDay.has(i)) byDay.set(i, []);
       byDay.get(i)!.push(e);
     }
@@ -94,6 +115,7 @@ export function buildTimeline(ctx: AdvisorContext): Timeline {
     }
   }
   const checkin: (CheckIn | undefined)[] = Array(n).fill(undefined);
+  const exposure: (CheckIn | undefined)[] = Array(n).fill(undefined);
   const duringAttack = new Uint8Array(n);
   let checkinDays = 0;
   const nowMs = ctx.now.getTime();
@@ -101,6 +123,7 @@ export function buildTimeline(ctx: AdvisorContext): Timeline {
     const i = idx.get(d.date);
     if (i === undefined || !d.checkin) continue;
     checkin[i] = d.checkin;
+    exposure[i] = exposureOf(d.checkin, startAt[i]);
     checkinDays++;
     const at = new Date(d.checkin.at).getTime();
     if (Number.isNaN(at)) continue;
@@ -132,7 +155,44 @@ export function buildTimeline(ctx: AdvisorContext): Timeline {
   const weather = new Map((ctx.weather ?? []).map((w) => [w.date, w]));
   let attacks = 0;
   for (let i = 0; i < n - 1; i++) attacks += start[i];
-  return { keys, idx, today: n - 1, start, checkin, duringAttack, med, peri, periods, cycleLen, weather, attacks, checkinDays };
+  return { keys, idx, today: n - 1, start, checkin, exposure, startAt, duringAttack, med, peri, periods, cycleLen, weather, attacks, checkinDays };
+}
+
+// ---------- Causalità inversa ----------
+// Nei giorni in cui inizia un attacco, alcuni fattori della giornata possono essere CONSEGUENZE del dolore:
+// si salta il pasto per la nausea, non ci si muove, si beve poco, si cambia il caffè (meno per la nausea o di più
+// per alleviare il dolore), si evitano alcol e schermi (fotofobia). Anche lo stress percepito: il dolore lo aumenta
+// e il giudizio è dato a posteriori sulla giornata (rapporto bidirezionale stress-cefalea: Houle & Nash, Headache
+// 2008; per questo Lipton et al., Neurology 2014 lo misuravano nel diario PRIMA dell'attacco).
+// Restano validi: il sonno e gli orari del sonno (riguardano la notte PRIMA; nota: un attacco notturno che
+// sveglia può ancora far segnare "poco sonno") e i prodromi (gestiti a parte con duringAttack).
+// Regola: in quei giorni un fattore conta solo se è stato registrato PRIMA dell'inizio del primo attacco del giorno
+// (`times[campo]`; nei check-in vecchi senza `times`, o per un campo senza ora, si usa `at` = ultima modifica, che è
+// sempre ≥ dell'ora vera: scelta conservativa). Registrato dopo → non noto. Anche i check-in compilati a posteriori
+// (Calendario) hanno ore successive all'attacco: nei giorni d'attacco quei fattori risultano non noti.
+// L'esclusione dipende dall'esito (giorno d'attacco) e non dall'esposizione: come in uno studio caso-controllo
+// l'odds ratio resta corretto (RR ≈ OR per eventi rari); le frequenze assolute ne risentono poco.
+export const CONSEQUENCE_PRONE: CheckInField[] = ['stress', 'meals', 'water', 'caffeine', 'alcohol', 'screens', 'activity'];
+
+/** Ora (ms) in cui un campo del check-in è stato impostato; fallback all'ultima modifica `at`. */
+export function fieldTime(c: CheckIn, f: CheckInField): number {
+  const t = new Date(c.times?.[f] ?? c.at).getTime();
+  return Number.isNaN(t) ? new Date(c.at).getTime() : t;
+}
+
+/** Copia "pulita" del check-in per i modelli (vedi sopra). `attackStart` = ms del primo attacco del giorno o NaN. */
+export function exposureOf(c: CheckIn, attackStart: number): CheckIn {
+  const x: CheckIn = {
+    ...c,
+    activity: activityOf(c),
+    exercise: undefined,
+    alcohol: flagOf(c, 'alcohol'),
+    sleepIrregular: flagOf(c, 'sleepIrregular'),
+    screens: flagOf(c, 'screens')
+  };
+  if (!Number.isNaN(attackStart))
+    for (const f of CONSEQUENCE_PRONE) if (!(fieldTime(c, f) <= attackStart)) delete x[f];
+  return x;
 }
 
 /** Finestra perimestruale di un giorno qualsiasi (anche futuro): reale se registrata, altrimenti stimata. */
@@ -206,7 +266,8 @@ function estimate(tl: Timeline, id: string, label: string, prior: { rr: number; 
   return { id, label, rr: r2(p.rr), low: r2(p.low), high: r2(p.high), exposedDays: n1, basis: basisOf(p.weight) };
 }
 
-const ci = (tl: Timeline, i: number) => tl.checkin[i];
+// Esposizioni sempre dal check-in "pulito" (chip risolti, causalità inversa esclusa)
+const ci = (tl: Timeline, i: number) => tl.exposure[i];
 const known = <T>(v: T | undefined, test: (v: T) => boolean): 0 | 1 | null => (v === undefined ? null : test(v) ? 1 : 0);
 
 /** Esposizione ai prodromi: nota solo se il check-in non è stato fatto durante un attacco (sarebbero sintomi dell'attacco). */
@@ -224,13 +285,19 @@ export function personalTriggers(ctx: AdvisorContext, timeline?: Timeline): Trig
   const out: TriggerRisk[] = [
     estimate(tl, 'sleep_poco', L.sleep_poco.label, L.sleep_poco, (i) => known(ci(tl, i)?.sleep, (v) => v === 'poco')),
     estimate(tl, 'sleep_troppo', L.sleep_troppo.label, L.sleep_troppo, (i) => known(ci(tl, i)?.sleep, (v) => v === 'troppo')),
+    estimate(tl, 'sleep_irregolare', L.sleep_irregolare.label, L.sleep_irregolare, (i) => known(ci(tl, i)?.sleepIrregular, (v) => v)),
+    estimate(tl, 'screens', L.screens.label, L.screens, (i) => known(ci(tl, i)?.screens, (v) => v)),
     estimate(tl, 'stress_alto', L.stress_alto.label, L.stress_alto, (i) => known(ci(tl, i)?.stress, (v) => v === 'alto')),
     estimate(tl, 'meals_saltato', L.meals_saltato.label, L.meals_saltato, (i) => known(ci(tl, i)?.meals, (v) => v === 'saltato')),
     estimate(tl, 'water_poca', L.water_poca.label, L.water_poca, (i) => known(ci(tl, i)?.water, (v) => v === 'poca')),
     estimate(tl, 'caffeine_piu', L.caffeine_piu.label, L.caffeine_piu, (i) => known(ci(tl, i)?.caffeine, (v) => v === 'piu')),
     estimate(tl, 'caffeine_meno', L.caffeine_meno.label, L.caffeine_meno, (i) => known(ci(tl, i)?.caffeine, (v) => v === 'meno')),
     estimate(tl, 'alcohol', L.alcohol.label, L.alcohol, (i) => known(ci(tl, i)?.alcohol, (v) => v)),
-    estimate(tl, 'no_exercise', L.no_exercise.label, L.no_exercise, (i) => known(ci(tl, i)?.exercise, (v) => !v)),
+    estimate(tl, 'no_exercise', L.no_exercise.label, L.no_exercise, (i) => {
+      const a = activityOf(ci(tl, i));
+      return a === undefined || a === 'leggera' ? null : a === 'nessuna' ? 1 : 0;
+    }),
+    estimate(tl, 'exercise_intensa', L.exercise_intensa.label, L.exercise_intensa, (i) => known(activityOf(ci(tl, i)), (v) => v === 'intensa')),
     estimate(tl, 'prodrome', L.prodrome.label, L.prodrome, (i) => prodromeExposure(tl, i)),
     estimate(tl, 'weekend', L.weekend.label, L.weekend, (i) => (isWeekend(tl.keys[i]) ? 1 : 0))
   ];

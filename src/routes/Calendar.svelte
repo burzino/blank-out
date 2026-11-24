@@ -8,6 +8,7 @@
   import { settings } from '../lib/settings.svelte';
   import { haptic, toast } from '../lib/ui.svelte';
   import type { DayInfo, Episode } from '../lib/types';
+  import CheckIn from '../components/CheckIn.svelte';
   import Icon from '../components/Icon.svelte';
   import MonthGrid from '../components/MonthGrid.svelte';
   import Sheet from '../components/Sheet.svelte';
@@ -49,7 +50,13 @@
   function pick(k: string) {
     selected = k;
     sheetOpen = true;
+    checkinOpen = false;
   }
+
+  // Check-in di un giorno passato (o di oggi). Compilato a posteriori: le ore registrate sono successive a un
+  // eventuale attacco di quel giorno, quindi i fattori della giornata non verranno usati come "prima dell'attacco".
+  let checkinOpen = $state(false);
+  const selCheckin = $derived(selected ? days.get(selected)?.checkin : undefined);
 
   const sel = $derived(selected ? marks.get(selected) : undefined);
   const selInfo = $derived<DayInfo>(selected ? (days.get(selected) ?? { date: selected }) : { date: '' });
@@ -158,6 +165,16 @@
         <button class="chip" aria-pressed={!!selInfo.periodStart} onclick={() => toggleDay('periodStart')}>Primo giorno del ciclo</button>
       {/if}
     </div>
+
+    {#if checkinOpen}
+      <div class="day-checkin">
+        {#key selected}<CheckIn date={selected} />{/key}
+      </div>
+    {:else}
+      <button class="btn block" style="margin-top:16px" aria-expanded="false" onclick={() => (checkinOpen = true)}>
+        {selCheckin ? 'Vedi o modifica il check-in del giorno' : 'Compila il check-in del giorno'}
+      </button>
+    {/if}
   {:else}
     <p class="small muted">Questo giorno non è ancora arrivato.</p>
   {/if}
@@ -176,5 +193,6 @@
   .flow { color: var(--i3); display: inline-flex; }
   .free { color: var(--i1); font-weight: 700; }
   .badge { min-width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; background: var(--surface-2); }
+  .day-checkin { margin-top: 16px; }
   .toggles { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 </style>

@@ -71,17 +71,29 @@ export interface Questionnaire {
 
 // Check-in giornaliero (facoltativo, 10 secondi): dà i "giorni di confronto" per stimare i trigger veri.
 // Il sonno si riferisce alla notte precedente; il resto alla giornata.
+// Movimento: nessuno · leggero (passeggiata, faccende) · moderato (camminata svelta, bici) · intenso (corsa, palestra, sport)
+export type Activity = 'nessuna' | 'leggera' | 'moderata' | 'intensa';
+
 export interface CheckIn {
-  at: string; // ISO della compilazione
+  at: string; // ISO dell'ultima modifica (riscritto a ogni salvataggio)
   sleep?: 'poco' | 'ok' | 'troppo';
+  sleepIrregular?: boolean; // notte precedente a orari diversi dal solito (letto tardi, sveglia tardi…)
   stress?: 'basso' | 'medio' | 'alto';
   meals?: 'regolari' | 'saltato';
   water?: 'poca' | 'ok';
   caffeine?: 'meno' | 'solito' | 'piu';
   alcohol?: boolean;
+  screens?: boolean; // molte ore di schermo o luce forte
+  activity?: Activity; // movimento della giornata
+  /** @deprecated vecchio sì/no: usare activityOf() che lo converte */
   exercise?: boolean;
   prodromes?: string[]; // id da PRODROMES in catalog.ts
+  /** ISO di quando ogni campo è stato impostato l'ultima volta (assente nei check-in vecchi: si usa `at`).
+   *  Serve a capire se un fattore è stato registrato prima o dopo l'inizio di un attacco. */
+  times?: Partial<Record<CheckInField, string>>;
 }
+
+export type CheckInField = 'sleep' | 'sleepIrregular' | 'stress' | 'meals' | 'water' | 'caffeine' | 'alcohol' | 'screens' | 'activity' | 'prodromes';
 
 // Giorno di calendario con informazioni extra (ciclo, giornata senza mal di testa, check-in)
 export interface DayInfo {
@@ -103,5 +115,20 @@ export interface BackupFile {
   days: DayInfo[];
   customTriggers: string[];
   settings?: Record<string, unknown>;
-  profile?: { name?: string; birthYear?: number };
+  profile?: Profile;
+}
+
+// Profilo del paziente: tutto facoltativo, compare solo nel report per il medico (normalizeProfile in profile.ts)
+export type HormonalTherapy = 'nessuna' | 'estroprogestinica' | 'progestinico' | 'sostitutiva' | 'altro';
+
+export interface Profile {
+  name?: string;
+  birthYear?: number;
+  sex?: 'femmina' | 'maschio' | 'altro'; // altro = altro / preferisco non dire
+  hormonal?: HormonalTherapy;
+  hormonalNote?: string; // testo libero (nome del farmaco o "altro")
+  onsetAge?: number; // età all'esordio del mal di testa (anni)
+  onsetYear?: number; // in alternativa: anno di esordio
+  familyHistory?: 'si' | 'no' | 'non_so'; // familiarità per emicrania
+  smoking?: 'si' | 'no' | 'ex';
 }

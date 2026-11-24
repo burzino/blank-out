@@ -1,5 +1,6 @@
 // Coach: consigli pratici e NON medici per oggi, durante l'attacco e per la settimana.
 // Nessun farmaco specifico e nessuna dose: solo abitudini e gesti concreti.
+import { activityOf } from '../catalog';
 import { addDays, dayKey } from '../clinic';
 import type { CheckIn } from '../types';
 import type { AdvisorContext, DailyPlan, Forecast, TriggerRisk, WeeklyGoal } from './types';
@@ -42,6 +43,11 @@ const ACTIONS: Record<string, { action: string; habit: string; generic: string }
     habit: 'Sveglia alla stessa ora tutti i giorni, anche nel weekend.',
     generic: 'Per molte persone con emicrania anche dormire troppo può scatenare un attacco.'
   },
+  sleep_irregolare: {
+    action: 'Stasera a letto alla tua ora solita e domattina sveglia alla solita ora, anche se hai fatto tardi.',
+    habit: 'Orari di sonno costanti: a letto e in piedi più o meno alla stessa ora, weekend compreso.',
+    generic: 'Per molte persone con emicrania cambiare gli orari del sonno, anche solo dormire più a lungo nel weekend, può scatenare un attacco.'
+  },
   weekend: {
     action: 'Stasera a letto alla solita ora, anche se è venerdì o sabato. Colazione agli orari di sempre.',
     habit: 'Nel weekend mantieni orari di sonno e pasti simili alla settimana.',
@@ -82,6 +88,11 @@ const ACTIONS: Record<string, { action: string; habit: string; generic: string }
     habit: 'Movimento aerobico almeno 3 volte a settimana.',
     generic: 'L’attività aerobica regolare è una delle abitudini con più prove nel ridurre gli attacchi.'
   },
+  exercise_intensa: {
+    action: 'Dopo uno sforzo intenso: bevi bene, mangia qualcosa entro un’ora e non saltare il pasto. La prossima volta riscaldati con calma per 10-15 minuti.',
+    habit: 'Prima dello sport intenso: riscaldamento graduale, acqua e un pasto non troppo lontano.',
+    generic: 'Per alcune persone con emicrania lo sforzo intenso o insolito può scatenare un attacco. Il movimento regolare e graduale invece aiuta.'
+  },
   perimenstrual: {
     action: 'Sono i giorni del ciclo: pasti regolari, acqua e sonno curati. Tieni a portata il farmaco previsto dal medico.',
     habit: 'Segna i giorni del ciclo: aiuta a prevedere i giorni a rischio.',
@@ -100,8 +111,8 @@ const ACTIONS: Record<string, { action: string; habit: string; generic: string }
 };
 
 // Ordine di importanza dei fattori presenti oggi
-const FACTOR_ORDER = ['prodrome', 'perimenstrual', 'sleep_poco', 'sleep_troppo', 'meals_saltato', 'stress_alto', 'water_poca', 'alcohol', 'caffeine_meno', 'caffeine_piu', 'pressure_drop', 'weekend', 'no_exercise', 'screens'];
-const MODIFIABLE = ['sleep_poco', 'sleep_troppo', 'stress_alto', 'meals_saltato', 'water_poca', 'caffeine_piu', 'caffeine_meno', 'alcohol', 'no_exercise', 'weekend'];
+const FACTOR_ORDER = ['prodrome', 'perimenstrual', 'sleep_poco', 'sleep_troppo', 'sleep_irregolare', 'meals_saltato', 'stress_alto', 'water_poca', 'alcohol', 'caffeine_meno', 'caffeine_piu', 'pressure_drop', 'exercise_intensa', 'weekend', 'no_exercise', 'screens'];
+const MODIFIABLE = ['sleep_poco', 'sleep_troppo', 'stress_alto', 'meals_saltato', 'water_poca', 'caffeine_piu', 'caffeine_meno', 'alcohol', 'no_exercise', 'exercise_intensa', 'weekend', 'sleep_irregolare', 'screens'];
 
 function levelOf(fc: Forecast, factors: Factor[]): DailyPlan['level'] {
   if (fc.available && fc.level) return fc.level;
@@ -211,11 +222,11 @@ export function attackPlan(ctx: AdvisorContext): { id: string; text: string }[] 
 
 // ---------- Obiettivi settimanali ----------
 const GOALS: { id: string; triggers: string[]; title: string; target: number; unit: string; ok: (c: CheckIn) => boolean; generic: string }[] = [
-  { id: 'sonno', triggers: ['sleep_poco', 'sleep_troppo', 'weekend'], title: 'Dormi il giusto', target: 5, unit: 'giorni', ok: (c) => c.sleep === 'ok', generic: 'Un sonno regolare è una delle abitudini più utili contro l’emicrania.' },
+  { id: 'sonno', triggers: ['sleep_poco', 'sleep_troppo', 'sleep_irregolare', 'weekend'], title: 'Dormi il giusto, agli orari di sempre', target: 5, unit: 'giorni', ok: (c) => c.sleep === 'ok' && !c.sleepIrregular, generic: 'Un sonno regolare è una delle abitudini più utili contro l’emicrania.' },
   { id: 'pasti', triggers: ['meals_saltato'], title: 'Pasti regolari', target: 6, unit: 'giorni', ok: (c) => c.meals === 'regolari', generic: 'Saltare i pasti è un fattore scatenante frequente.' },
   { id: 'acqua', triggers: ['water_poca'], title: 'Bevi abbastanza', target: 6, unit: 'giorni', ok: (c) => c.water === 'ok', generic: 'Bere poco può favorire il dolore.' },
   { id: 'stress', triggers: ['stress_alto'], title: 'Stress sotto controllo (10 minuti di relax al giorno)', target: 5, unit: 'giorni', ok: (c) => !!c.stress && c.stress !== 'alto', generic: 'Il rilassamento regolare riduce gli attacchi legati allo stress.' },
-  { id: 'movimento', triggers: ['no_exercise'], title: 'Movimento almeno 3 volte', target: 3, unit: 'volte', ok: (c) => !!c.exercise, generic: 'L’attività aerobica regolare riduce gli attacchi.' },
+  { id: 'movimento', triggers: ['no_exercise'], title: 'Movimento almeno 3 volte', target: 3, unit: 'volte', ok: (c) => ['moderata', 'intensa'].includes(activityOf(c) ?? ''), generic: 'L’attività aerobica regolare riduce gli attacchi.' },
   { id: 'alcol', triggers: ['alcohol'], title: 'Alcol al massimo 1 sera', target: 6, unit: 'giorni senza alcol', ok: (c) => !c.alcohol, generic: 'L’alcol è un fattore scatenante comune.' },
   { id: 'caffe', triggers: ['caffeine_piu', 'caffeine_meno'], title: 'Caffè costante, il solito', target: 5, unit: 'giorni', ok: (c) => c.caffeine === 'solito', generic: 'Sbalzi di caffeina, in più o in meno, possono scatenare il dolore.' }
 ];

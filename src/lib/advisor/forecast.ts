@@ -2,8 +2,9 @@
 // Un esempio per giorno (dal primo giorno registrato a ieri); y = 1 se quel giorno INIZIA un attacco.
 // I coefficienti hanno prior gaussiani centrati sui log-RR della letteratura (vedi LIT in triggers.ts):
 // senza dati la stima coincide con "una persona tipica con emicrania", con molti dati domina lo storico personale.
+import { activityOf } from '../catalog';
 import { addDays, dayKey } from '../clinic';
-import type { CheckIn } from '../types';
+import type { Activity, CheckIn } from '../types';
 import { buildTimeline, isWeekend, periAt, type Timeline } from './triggers';
 import type { AdvisorContext, Forecast } from './types';
 
@@ -149,6 +150,9 @@ const SPECS: Spec[] = [
   { id: 'sleep_poco', rr: 1.6, sd: 0.35, typical: 0.2, up: 'Hai dormito poco', down: null },
   { id: 'sleep_troppo', rr: 1.3, sd: 0.4, typical: 0.1, up: 'Hai dormito più del solito', down: null },
   { id: 'sleep_poco_ieri', rr: 1.3, sd: 0.35, typical: 0.2, up: 'Poco sonno anche la notte prima', down: null },
+  // Orari del sonno e schermi: prior e fonti in LIT (triggers.ts)
+  { id: 'sleep_irregolare', rr: 1.3, sd: 0.4, typical: 0.15, up: 'Orari di sonno diversi dal solito', down: null },
+  { id: 'screens', rr: 1.15, sd: 0.45, typical: 0.25, up: 'Molte ore di schermo o luce forte', down: null },
   { id: 'stress_alto', rr: 1.5, sd: 0.4, typical: 0.2, up: 'Stress alto', down: null },
   { id: 'stress_alto_ieri', rr: 1.2, sd: 0.4, typical: 0.2, up: 'Stress alto ieri', down: null },
   { id: 'stress_calo', rr: 1.6, sd: 0.4, typical: 0.05, up: 'Calo dello stress dopo giorni intensi', down: null },
@@ -158,7 +162,10 @@ const SPECS: Spec[] = [
   { id: 'caffeine_meno', rr: 1.3, sd: 0.4, typical: 0.1, up: 'Meno caffè del solito', down: null },
   { id: 'alcohol_ieri', rr: 1.4, sd: 0.4, typical: 0.1, up: 'Alcol ieri', down: null },
   { id: 'alcohol', rr: 1.15, sd: 0.4, typical: 0.1, up: 'Alcol oggi', down: null },
-  { id: 'no_exercise', rr: 1.2, sd: 0.3, typical: 0.5, up: 'Niente movimento', down: 'Hai fatto movimento' },
+  // Movimento: sedentarietà a dose (nessuno 1, leggero 0.5, moderato/intenso 0) e sforzo intenso come trigger acuto
+  { id: 'no_exercise', rr: 1.2, sd: 0.3, typical: 0.4, up: 'Poco o nessun movimento', down: 'Hai fatto movimento' },
+  { id: 'exercise_intensa', rr: 1.3, sd: 0.45, typical: 0.08, up: 'Sforzo fisico intenso', down: null },
+  { id: 'exercise_intensa_ieri', rr: 1.15, sd: 0.4, typical: 0.08, up: 'Sforzo fisico intenso ieri', down: null },
   { id: 'prodrome', rr: 2.0, sd: 0.5, typical: 0.1, up: 'Segnali premonitori oggi', down: null },
   { id: 'prodrome_ieri', rr: 3.0, sd: 0.5, typical: 0.1, up: 'Segnali premonitori ieri', down: null },
   { id: 'checkin_missing', rr: 1, sd: 0.5, typical: 0.5, up: null, down: null },
@@ -172,6 +179,7 @@ const SPECS: Spec[] = [
   { id: 'meds3', rr: 1, sd: 0.5, typical: 0.5, up: 'Antidolorifici negli ultimi giorni', down: null }
 ];
 const D = SPECS.length;
+const SEDENTARY: Record<Activity, number> = { nessuna: 1, leggera: 0.5, moderata: 0, intensa: 0 };
 const F = Object.fromEntries(SPECS.map((s, j) => [s.id, j])) as Record<string, number>;
 const LOG8 = Math.log(8);
 
@@ -182,8 +190,9 @@ const LOG8 = Math.log(8);
 function rawRow(tl: Timeline, i: number, mode: 'train' | 'predict'): Float64Array {
   const x = new Float64Array(D).fill(NaN);
   const k = i < tl.keys.length ? tl.keys[i] : addDays(tl.keys[tl.keys.length - 1], i - tl.keys.length + 1);
-  const c: CheckIn | undefined = i < tl.keys.length ? tl.checkin[i] : undefined;
-  const cy: CheckIn | undefined = i > 0 && i - 1 < tl.keys.length ? tl.checkin[i - 1] : undefined;
+  // Check-in "puliti" (tl.exposure): chip sì/no risolti e fattori registrati dopo l'inizio dell'attacco non noti
+  const c: CheckIn | undefined = i < tl.keys.length ? tl.exposure[i] : undefined;
+  const cy: CheckIn | undefined = i > 0 && i - 1 < tl.keys.length ? tl.exposure[i - 1] : undefined;
   const set = (id: string, v: number | undefined | null) => {
     if (v !== undefined && v !== null) x[F[id]] = v;
   };
@@ -201,7 +210,13 @@ function rawRow(tl: Timeline, i: number, mode: 'train' | 'predict'): Float64Arra
       set('caffeine_meno', b(c.caffeine === 'meno'));
     }
     if (c.alcohol !== undefined) set('alcohol', b(c.alcohol));
-    if (c.exercise !== undefined) set('no_exercise', b(!c.exercise));
+    if (c.sleepIrregular !== undefined) set('sleep_irregolare', b(c.sleepIrregular));
+    if (c.screens !== undefined) set('screens', b(c.screens));
+    const act = activityOf(c);
+    if (act) {
+      set('no_exercise', SEDENTARY[act]);
+      set('exercise_intensa', b(act === 'intensa'));
+    }
     // Prodromi registrati durante un attacco sono sintomi dell'attacco, non segnali premonitori
     if (!tl.duringAttack[i]) set('prodrome', b((c.prodromes ?? []).length > 0));
   }
@@ -210,6 +225,8 @@ function rawRow(tl: Timeline, i: number, mode: 'train' | 'predict'): Float64Arra
     if (cy.stress) set('stress_alto_ieri', b(cy.stress === 'alto'));
     if (cy.stress && c?.stress) set('stress_calo', b(cy.stress === 'alto' && c.stress !== 'alto'));
     if (cy.alcohol !== undefined) set('alcohol_ieri', b(cy.alcohol));
+    const acty = activityOf(cy);
+    if (acty) set('exercise_intensa_ieri', b(acty === 'intensa'));
     if (!tl.duringAttack[i - 1]) set('prodrome_ieri', b((cy.prodromes ?? []).length > 0));
   }
   // Domani il check-in non c'è ancora: si imputa come se fosse compilato (valori attesi), non come "mancante"
@@ -401,6 +418,8 @@ export function riskFactorsToday(ctx: AdvisorContext): { id: string; label: stri
   if (c) {
     if (c.sleep === 'poco') add('sleep_poco', 'Hai dormito poco');
     if (c.sleep === 'troppo') add('sleep_troppo', 'Hai dormito più del solito');
+    if (c.sleepIrregular) add('sleep_irregolare', 'Orari di sonno diversi dal solito');
+    if (c.screens) add('screens', 'Molte ore di schermo o luce forte');
     if (c.stress === 'alto') add('stress_alto', 'Stress alto');
     else if (cy?.stress === 'alto' && c.stress) add('stress_alto', 'Calo dello stress dopo giorni intensi');
     if (c.meals === 'saltato') add('meals_saltato', 'Hai saltato un pasto');
@@ -408,11 +427,13 @@ export function riskFactorsToday(ctx: AdvisorContext): { id: string; label: stri
     if (c.caffeine === 'piu') add('caffeine_piu', 'Più caffè del solito');
     if (c.caffeine === 'meno') add('caffeine_meno', 'Meno caffè del solito');
     if (c.alcohol) add('alcohol', 'Alcol');
-    if (c.exercise === false) add('no_exercise', 'Niente movimento');
+    if (activityOf(c) === 'nessuna') add('no_exercise', 'Niente movimento');
+    if (activityOf(c) === 'intensa') add('exercise_intensa', 'Sforzo fisico intenso');
     if ((c.prodromes ?? []).length && !tl.duringAttack[tl.today]) add('prodrome', 'Segnali premonitori oggi');
   }
   if (cy) {
     if (cy.alcohol) add('alcohol', 'Alcol ieri');
+    if (activityOf(cy) === 'intensa') add('exercise_intensa', 'Sforzo fisico intenso ieri');
     if ((cy.prodromes ?? []).length && !tl.duringAttack[tl.today - 1]) add('prodrome', 'Segnali premonitori ieri');
   }
   const pt = periAt(tl, today);

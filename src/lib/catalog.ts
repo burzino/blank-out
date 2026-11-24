@@ -1,4 +1,5 @@
 // Cataloghi clinici e soglie. Le soglie sono qui, in un unico posto, così sono facili da aggiornare.
+import type { Activity, CheckIn } from './types';
 
 export type Opt = { id: string; label: string };
 
@@ -258,8 +259,32 @@ export const CHECKIN = {
   stress: [{ id: 'basso', label: 'Basso' }, { id: 'medio', label: 'Medio' }, { id: 'alto', label: 'Alto' }],
   meals: [{ id: 'regolari', label: 'Regolari' }, { id: 'saltato', label: 'Saltato un pasto' }],
   water: [{ id: 'poca', label: 'Poca' }, { id: 'ok', label: 'Abbastanza' }],
-  caffeine: [{ id: 'meno', label: 'Meno del solito' }, { id: 'solito', label: 'Il solito' }, { id: 'piu', label: 'Di più' }]
+  caffeine: [{ id: 'meno', label: 'Meno del solito' }, { id: 'solito', label: 'Il solito' }, { id: 'piu', label: 'Di più' }],
+  activity: [{ id: 'nessuna', label: 'Nessuno' }, { id: 'leggera', label: 'Leggero' }, { id: 'moderata', label: 'Moderato' }, { id: 'intensa', label: 'Intenso' }]
 } satisfies Record<string, Opt[]>;
+
+/** Movimento del check-in; converte il vecchio sì/no (sì → moderato: intensità ignota, non la si assume intensa). */
+export function activityOf(c: CheckIn | undefined): Activity | undefined {
+  if (!c) return undefined;
+  if (c.activity) return c.activity;
+  return c.exercise === undefined ? undefined : c.exercise ? 'moderata' : 'nessuna';
+}
+
+/** Check-in "fatto": sonno e stress compilati (lo stress si segna la sera, quindi la persona ha visto tutto il modulo). */
+export const checkinDone = (c: CheckIn | undefined) => !!(c?.sleep && c?.stress);
+
+/** Chip sì/no del check-in (alcol, orari del sonno, schermi): un chip non toccato è `undefined`.
+ *  Regola: se il check-in è fatto, un chip non toccato vale "no" (non c'è altro modo di dire "no" e senza giorni "no"
+ *  il fattore non si potrebbe mai stimare). Errori occasionali (chip dimenticato) attenuano la stima verso 1, non
+ *  creano trigger falsi. I chip nuovi (orari, schermi) valgono "no" solo nei check-in salvati dalla versione che li
+ *  mostra (riconoscibili da `times`): prima non c'erano, quindi restano ignoti. Altrimenti `undefined` = non noto. */
+export function flagOf(c: CheckIn | undefined, key: 'alcohol' | 'sleepIrregular' | 'screens'): boolean | undefined {
+  if (!c) return undefined;
+  if (c[key] !== undefined) return c[key];
+  if (!checkinDone(c)) return undefined;
+  if (key !== 'alcohol' && !c.times) return undefined;
+  return false;
+}
 
 // Segnali premonitori (prodromi): spesso 24-48 h prima dell'attacco
 export const PRODROMES: Opt[] = [
