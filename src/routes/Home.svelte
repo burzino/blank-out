@@ -10,7 +10,7 @@
   import LogSheet from '../components/LogSheet.svelte';
   import MedPicker from '../components/MedPicker.svelte';
   import Sheet from '../components/Sheet.svelte';
-  import { drive, reauth } from '../lib/drive.svelte';
+  import { reauth, syncBannerVisible } from '../lib/drive.svelte';
   import CheckIn from '../components/CheckIn.svelte';
   import { forecast, riskFactorsToday } from '../lib/advisor/forecast';
   import { personalTriggers } from '../lib/advisor/triggers';
@@ -129,9 +129,9 @@
     </div>
   {/if}
 
-  {#if drive.enabled && drive.needsReauth}
+  {#if syncBannerVisible()}
     <button class="card nav sync" onclick={() => reauth().then((ok) => ok && toast('Backup salvato su Google Drive'), () => toast('Collegamento a Google non completato'))}>
-      <span class="grow">Backup in sospeso · <strong>tocca per sincronizzare</strong></span><span aria-hidden="true">›</span>
+      <span class="grow">Il backup su Drive è da aggiornare (i dati sono al sicuro qui) · <strong>tocca per ricollegare Google</strong></span><span aria-hidden="true">›</span>
     </button>
   {/if}
 

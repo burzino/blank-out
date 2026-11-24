@@ -1,14 +1,25 @@
 // Backup automatico cifrato su Google Drive (cartella nascosta appDataFolder), senza server nostri.
-// Token OAuth (~1 h, scope limitato ad appDataFolder) salvato in localStorage per sopravvivere ai riavvii della PWA;
-// la chiave AES resta sul dispositivo (vedi crypto.ts).
-// Il popup di Google si apre solo da un tocco dell'utente: senza token valido il backup resta in sospeso
-// e la Home mostra "Ricollega Google".
+// La chiave AES resta sul dispositivo (vedi crypto.ts).
+//
+// Accesso a Google (limiti e scelte, vedi anche driveSync.ts):
+// - Senza server Google dà solo access token di ~1 h, niente refresh token: un accesso "per sempre" non è
+//   possibile. Servirebbe un piccolo backend (o una funzione serverless) col flusso "authorization code".
+// - Il token è salvato in localStorage e riusato finché vale, anche dopo aver chiuso la PWA.
+//   Compromesso di sicurezza accettato: lo scope è solo drive.appdata (la cartella nascosta dell'app, nessun
+//   altro file del Drive), il token scade da solo entro un'ora e i file sono comunque cifrati con una chiave
+//   che non lascia il dispositivo. Chi potesse leggere il localStorage avrebbe già accesso ai dati in chiaro.
+// - Il rinnovo apre sempre un popup di Google, quindi parte solo da un tocco (i popup "a caso" vengono bloccati).
+//   Per renderlo di un solo tocco, che si chiude da solo: prompt '' (niente consenso ripetuto) e login_hint con
+//   l'account ricordato (email letta da Drive, salvata solo sul dispositivo).
+// - Le modifiche non ancora su Drive restano in coda (anche tra un avvio e l'altro, tramite un'impronta dei dati)
+//   e partono da sole appena c'è un token valido. La Home avvisa solo se aspettano da più di 48 h.
 import { untrack } from 'svelte';
 import { GOOGLE_CLIENT_ID } from './config';
 import { clearLocalKey, decryptJson, deriveKey, encryptJson, isEncryptedFile, loadLocalKey, MIN_PASSWORD, newSalt, saveLocalKey } from './crypto';
 import { data, exportBackup, importBackup, isBackup } from './db.svelte';
 import { replaceSettings, saveSettings, settings, type Settings } from './settings.svelte';
 import type { BackupFile } from './types';
+import { fingerprint, parseStoredToken, shouldShowSyncBanner, tokenExpiry, tokenUsable, type StoredToken } from './driveSync';
 
 // ---- Tipi minimi di Google Identity Services ----
 interface TokenResponse {
@@ -18,13 +29,14 @@ interface TokenResponse {
   error_description?: string;
 }
 interface TokenClient {
-  requestAccessToken(override?: { prompt?: string }): void;
+  requestAccessToken(override?: { prompt?: string; login_hint?: string }): void;
 }
 interface GoogleOAuth2 {
   initTokenClient(config: {
     client_id: string;
     scope: string;
     prompt?: string;
+    login_hint?: string;
     callback: (r: TokenResponse) => void;
     error_callback?: (e: { type?: string; message?: string }) => void;
   }): TokenClient;
@@ -34,6 +46,7 @@ const gis = () => (window as unknown as { google?: { accounts?: { oauth2?: Googl
 
 const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const API = 'https://www.googleapis.com/drive/v3/files';
+const ABOUT = 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const MAIN_NAME = 'blank-out-backup.enc.json';
 const DAILY_RE = /^blank-out-(\d{4}-\d{2}-\d{2})\.enc\.json$/;
@@ -49,6 +62,10 @@ interface Persisted {
   connected: boolean;
   lastSyncAt: string | null;
   lastError: string | null;
+  // Campi aggiunti dopo: assenti nei dati salvati da versioni precedenti
+  account?: string; // email dell'account Google, usata solo come login_hint
+  pendingSince?: string | null; // prima modifica non ancora su Drive (ISO)
+  syncedHash?: string; // impronta dei dati dell'ultimo backup riuscito
 }
 function loadPersisted(): Persisted {
   const d: Persisted = { enabled: false, connected: false, lastSyncAt: null, lastError: null };
@@ -68,7 +85,15 @@ export const drive = $state({
 });
 
 function persist() {
-  const p: Persisted = { enabled: drive.enabled, connected: drive.connected, lastSyncAt: drive.lastSyncAt, lastError: drive.lastError };
+  const p: Persisted = {
+    enabled: drive.enabled,
+    connected: drive.connected,
+    lastSyncAt: drive.lastSyncAt,
+    lastError: drive.lastError,
+    account: drive.account,
+    pendingSince: drive.pendingSince,
+    syncedHash: drive.syncedHash
+  };
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(p));
   } catch {}
@@ -103,15 +128,15 @@ export function prepareGoogle(): Promise<void> {
 }
 
 // ---- Token ----
-let token: { value: string; exp: number } | null = (() => {
+let token: StoredToken | null = (() => {
   try {
-    return JSON.parse(localStorage.getItem(LS_TOKEN) ?? 'null');
+    return parseStoredToken(localStorage.getItem(LS_TOKEN));
   } catch {
     return null;
   }
 })();
-const tokenValid = () => !!token && Date.now() < token.exp - 60_000;
-function setToken(t: typeof token) {
+const tokenValid = () => tokenUsable(token, Date.now());
+function setToken(t: StoredToken | null) {
   token = t;
   try {
     if (t) localStorage.setItem(LS_TOKEN, JSON.stringify(t));
@@ -146,24 +171,28 @@ function openTokenFlow(prompt: '' | 'consent'): Promise<string> {
       };
       // Se l'utente abbandona il popup senza chiuderlo, GIS può non rispondere mai
       const timer = setTimeout(() => finish(() => reject(new ReauthError())), 180_000);
+      // Account ricordato: Google lo seleziona da solo e il popup si chiude senza altre scelte
+      const hint = prompt === '' && drive.account ? { login_hint: drive.account } : {};
       const client = gis()!.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
         scope: SCOPE,
         prompt,
+        ...hint,
         callback: (r) => {
           if (r.error || !r.access_token) return finish(() => reject(new ReauthError()));
-          setToken({ value: r.access_token, exp: Date.now() + Number(r.expires_in ?? 3600) * 1000 });
+          setToken({ value: r.access_token, exp: tokenExpiry(r.expires_in, Date.now()) });
           finish(() => resolve(r.access_token!));
         },
         error_callback: () => finish(() => reject(new ReauthError())) // popup bloccato o chiuso
       });
-      client.requestAccessToken({ prompt });
+      client.requestAccessToken({ prompt, ...hint });
     });
   return gis() ? run() : prepareGoogle().then(run);
 }
 
 // Senza gesto dell'utente: solo il token salvato. Un rinnovo qui aprirebbe il popup di Google
-// "a caso" (timer, cambio app, ritorno online), quindi si chiede di ricollegare con un tocco.
+// "a caso" (timer, cambio app, ritorno online) e verrebbe bloccato: GIS non ha un rinnovo davvero
+// silenzioso per i token. Le modifiche restano in coda finché l'utente non tocca qualcosa di Drive.
 async function getToken(): Promise<string> {
   if (tokenValid()) return token!.value;
   if (tokenP) return tokenP; // popup già aperto da un tocco: si aspetta quello
@@ -176,6 +205,23 @@ export async function connectGoogle(): Promise<void> {
   drive.connected = true;
   drive.needsReauth = false;
   persist();
+  if (!drive.account) void rememberAccount();
+}
+
+// Email dell'account, per il login_hint dei prossimi ricollegamenti. Facoltativa: se Drive non la dà, pazienza.
+async function rememberAccount() {
+  try {
+    const j = (await (await api(ABOUT)).json()) as { user?: { emailAddress?: string } };
+    if (j.user?.emailAddress) {
+      drive.account = j.user.emailAddress;
+      persist();
+    }
+  } catch {}
+}
+
+/** Avviso in Home: solo con modifiche ferme da oltre 48 h e Google da ricollegare (vedi driveSync.ts). */
+export function syncBannerVisible(now = Date.now()): boolean {
+  return shouldShowSyncBanner({ enabled: drive.enabled, hasKey: drive.hasKey, needsReauth: drive.needsReauth, pendingSince: drive.pendingSince, now });
 }
 
 /** "Ricollega Google": ottiene un token nuovo e recupera un eventuale backup in sospeso. */
@@ -270,7 +316,7 @@ let running: Promise<boolean> | null = null;
 const isStale = () => !drive.lastSyncAt || Date.now() - new Date(drive.lastSyncAt).getTime() > STALE_MS;
 
 function errorText(e: unknown): string {
-  if (e instanceof ReauthError) return 'Serve ricollegare Google per continuare il backup.';
+  if (e instanceof ReauthError) return 'Per aggiornare il backup serve ricollegare Google con un tocco. Le modifiche restano salvate su questo dispositivo.';
   if (e instanceof HttpError) return e.status === 403 || e.status === 429 ? 'Google Drive è momentaneamente occupato: riproverò più tardi.' : 'Google Drive non ha accettato il backup: riproverò più tardi.';
   if (e instanceof TypeError) return 'Connessione assente: riproverò appena possibile.';
   return e instanceof Error ? e.message : 'Backup non riuscito.';
@@ -310,6 +356,7 @@ async function doBackup(): Promise<boolean> {
   dirty = false;
   drive.syncing = true;
   try {
+    const hash = fingerprint(dataJson()); // stessi dati del payload, letti nello stesso istante
     const payload = exportBackup($state.snapshot(settings) as unknown as Record<string, unknown>);
     const file = await encryptJson(payload, localKey.key, localKey.salt);
     await uploadAll(JSON.stringify(file));
@@ -317,6 +364,9 @@ async function doBackup(): Promise<boolean> {
     drive.lastSyncAt = now;
     drive.lastError = null;
     drive.needsReauth = false;
+    drive.syncedHash = hash;
+    // Modifiche arrivate durante l'invio: restano in sospeso (con la data in cui erano entrate in coda)
+    if (!dirty) drive.pendingSince = null;
     settings.lastBackupAt = now;
     saveSettings();
     return true;
@@ -354,17 +404,11 @@ export function startAutoBackup() {
   $effect.root(() => {
     $effect(() => {
       if (!data.ready) return;
-      const { ready: _r, ...rest } = data;
-      const s = JSON.stringify(rest);
-      if (last === null || s === last) {
-        last = s; // primo giro: è lo stato caricato, non una modifica
-        return;
-      }
+      const s = dataJson();
+      if (s === last) return;
+      const first = last === null; // primo giro: è lo stato caricato, non una modifica
       last = s;
-      untrack(() => {
-        dirty = true;
-        if (drive.enabled && drive.hasKey && !drive.needsReauth) schedule();
-      });
+      untrack(() => onDataChanged(s, first));
     });
   });
 
@@ -373,13 +417,45 @@ export function startAutoBackup() {
     if (document.visibilityState === 'hidden') flush();
   });
   window.addEventListener('online', flush);
+}
 
-  // All'avvio: se l'ultimo backup è vecchio di oltre 24 h, ne fa uno
-  void keyLoaded.then(() => {
-    if (drive.enabled && drive.hasKey && isStale()) {
-      dirty = true;
-      void backupNow();
+function dataJson(): string {
+  const { ready: _r, ...rest } = data;
+  return JSON.stringify(rest);
+}
+
+function markPending() {
+  dirty = true;
+  if (drive.enabled && !drive.pendingSince) {
+    drive.pendingSince = new Date().toISOString();
+    persist();
+  }
+}
+
+// first = dati appena caricati all'avvio, non una modifica dell'utente
+function onDataChanged(s: string, first: boolean) {
+  if (drive.syncedHash !== undefined && fingerprint(s) === drive.syncedHash) {
+    // Uguali all'ultimo backup (avvio senza novità, modifica annullata, ripristino): niente da inviare
+    dirty = false;
+    clearTimeout(timer);
+    if (drive.pendingSince) {
+      drive.pendingSince = null;
+      persist();
     }
+  } else if (!first || drive.syncedHash !== undefined || isStale()) {
+    // All'avvio, dati diversi dall'ultimo backup = modifiche rimaste in coda da una sessione precedente.
+    // Senza impronta (dati di versioni precedenti) vale la vecchia regola: backup vecchio di oltre 24 h.
+    markPending();
+  }
+  if (!first) {
+    if (dirty && drive.enabled && drive.hasKey && !drive.needsReauth) schedule();
+    return;
+  }
+  // All'avvio: invia la coda; senza novità rinfresca lo snapshot giornaliero solo se c'è già un token
+  // valido (così un token scaduto non fa comparire avvisi quando non c'è nulla da salvare).
+  void keyLoaded.then(() => {
+    if (!drive.enabled || !drive.hasKey) return;
+    if (dirty || (isStale() && tokenValid())) void backupNow();
   });
 }
 
@@ -406,7 +482,7 @@ async function useKey(key: CryptoKey, salt: Uint8Array<ArrayBuffer>) {
   drive.hasKey = true;
   drive.enabled = true;
   drive.lastError = null;
-  dirty = true;
+  markPending();
   persist();
 }
 
@@ -428,7 +504,7 @@ export async function disconnect() {
   }
   await clearLocalKey();
   localKey = null;
-  Object.assign(drive, { enabled: false, connected: false, needsReauth: false, hasKey: false, lastError: null });
+  Object.assign(drive, { enabled: false, connected: false, needsReauth: false, hasKey: false, lastError: null, account: undefined, pendingSince: null, syncedHash: undefined });
   persist();
 }
 
@@ -464,5 +540,8 @@ export async function applyRestore(b: BackupFile): Promise<void> {
     // (così un ripristino da uno snapshot vecchio non sovrascrive subito il file principale)
     dirty = false;
     clearTimeout(timer);
+    drive.syncedHash = fingerprint(dataJson());
+    drive.pendingSince = null;
+    persist();
   }
 }
