@@ -1,7 +1,10 @@
 <script lang="ts">
-  import { AURAS, RED_FLAGS_SOON, RED_FLAGS_URGENT, SIDE_EFFECTS, SIDES, STOP_REASONS, SYMPTOMS, THRESHOLDS, TRIGGERS, FREQUENCIES, classLabel, labelOf } from '../lib/catalog';
-  import { CLASS_LABEL, chronicStatus, computeStats, cycleCorrelation, dayKey, formatDuration, hit6Impact, midasGrade, mohStatus, prophylaxisEfficacy, type ClassId } from '../lib/clinic';
-  import { dayInfoMap, dayMarks, effectiveWindow, firstRecord, fmt1, fmtDay, monthsIn, pct, prevalentSide, rollingWindow, tally } from '../lib/analytics';
+  import { AURAS, CHECKIN, RED_FLAGS_SOON, RED_FLAGS_URGENT, SIDE_EFFECTS, SIDES, STOP_REASONS, SYMPTOMS, THRESHOLDS, TRIGGERS, FREQUENCIES, classLabel, labelOf } from '../lib/catalog';
+  import { CLASS_LABEL, auraDurationSummary, chronicStatus, computeStats, cycleCorrelation, dayKey, formatDuration, hit6Impact, intakeTimingByDrug, midasGrade, mohStatus, prophylaxisEfficacy, type ClassId } from '../lib/clinic';
+  import { checkinSummary, dayInfoMap, dayMarks, effectiveWindow, firstRecord, fmt1, fmtDay, monthsIn, pct, prevalentSide, reportFactors, rollingWindow, tally } from '../lib/analytics';
+  import { auraWithCombinedPill, profileLines } from '../lib/profile';
+  import { personalTriggers } from '../lib/advisor/triggers';
+  import { loadCachedWeather } from '../lib/advisor/weather';
   import { data, saveProfile } from '../lib/db.svelte';
   import { clock } from '../lib/episodes.svelte';
   import { settings } from '../lib/settings.svelte';
@@ -18,6 +21,10 @@
   const eff = $derived(effectiveWindow(range.from, range.to, first));
   const s = $derived(computeStats(data.episodes, eff.from, eff.to, clock.now));
   const generated = new Date().toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  // 1. Profilo (solo i campi compilati)
+  const prof = $derived(profileLines(data.profile, clock.now.getFullYear()));
+  const auraPill = $derived(auraWithCombinedPill(data.profile, s.auraCount));
 
   // 2. Mini-calendari
   const cal = $derived(monthsIn(range.from, range.to));
@@ -42,6 +49,9 @@
     usedClasses.filter((c) => st.medDaysByClass[c]).map((c) => `${shortClass(c)} ${st.medDaysByClass[c]}`).join(', ') || '–';
   const shortClass = (c: string) => classLabel(c).split(' /')[0];
 
+  // 4. Sintomatici: tempo dall'inizio dell'attacco all'assunzione
+  const timing = $derived(intakeTimingByDrug(s.episodes, eff.from, eff.to));
+
   // 5. MOH e cronicità
   const moh = $derived(mohStatus(data.episodes, today).filter((r) => r.days > 0 || r.status !== 'ok'));
   const MOH_LABEL = { ok: 'nei limiti', warn: 'vicino alla soglia', over: 'oltre la soglia' } as const;
@@ -52,6 +62,28 @@
   const side = $derived(prevalentSide(s.sides));
   const auraTypes = $derived(tally(s.episodes.map((e) => e.aura), s.episodes.length));
   const cycle = $derived(data.days.some((d) => d.period || d.periodStart) ? cycleCorrelation(s.episodes, data.days, clock.now) : null);
+  const auraDur = $derived(auraDurationSummary(s.episodes));
+
+  // 6b. Check-in: aderenza, sonno/stress e fattori personali (stime statistiche, senza previsione del rischio)
+  const MIN_CHECKINS = 14;
+  const ci = $derived(checkinSummary(data.days, eff.from, eff.to));
+  const factors = $derived(
+    ci.done >= MIN_CHECKINS
+      ? reportFactors(
+          personalTriggers({
+            episodes: data.episodes,
+            days: data.days,
+            questionnaires: data.questionnaires,
+            prophylaxis: data.prophylaxis,
+            medications: data.medications,
+            now: clock.now,
+            weather: settings.weatherEnabled ? loadCachedWeather() : undefined
+          })
+        )
+      : []
+  );
+  const shares = (r: Record<string, number>, opts: { id: string; label: string }[]) => opts.map((o) => `${o.label.toLowerCase()} ${pct(r[o.id])}`).join(', ');
+  const fmt2 = (n: number) => n.toLocaleString('it-IT', { maximumFractionDigits: 2 });
 
   // 7. Questionari
   const midas = $derived(data.questionnaires.filter((q) => q.type === 'midas'));
@@ -87,6 +119,7 @@
     <div class="field">
       <label for="pname">Nome (facoltativo, compare sul report)</label>
       <input id="pname" type="text" autocomplete="name" value={data.profile.name ?? ''} oninput={(e) => setName(e.currentTarget.value)} />
+      <a class="small" href="#/settings">Età, sesso, terapia ormonale e altri dati del profilo: in Impostazioni</a>
     </div>
     <span class="label">Periodo</span>
     <div class="seg" role="group" aria-label="Periodo">
@@ -110,6 +143,14 @@
         Generato il {generated} · {s.episodes.length} episodi
       </div>
     </header>
+    {#if prof.length}
+      <p class="prof">
+        {#each prof as l, i (l.label)}{i ? ' · ' : ''}{l.label}: <strong>{l.value}</strong>{/each}
+      </p>
+    {/if}
+    {#if auraPill}
+      <p class="flag">Aura con contraccettivo estroprogestinico: da segnalare al medico.</p>
+    {/if}
 
     {#if !data.episodes.length}
       <p class="muted">Nessun episodio registrato.</p>
@@ -143,7 +184,7 @@
       <div class="tw"><table>
         <thead>
           <tr>
-            <th>Mese</th><th class="r">Gg cefalea</th><th class="r">Gg emicrania</th><th class="r">Gg sintomatici</th><th>per classe</th><th class="r">Int. media</th><th class="r">Durata media</th><th class="r">Gg a letto</th>
+            <th>Mese</th><th class="r">Gg cefalea</th><th class="r">Gg emicrania</th><th class="r">Gg sintomatici</th><th>per classe</th><th class="r">Int. media</th><th class="r">Durata media</th><th class="r">Gg a letto</th><th class="r">Gg attività ridotta</th>
           </tr>
         </thead>
         <tbody>
@@ -158,6 +199,7 @@
                 <td class="r">{fmt1(st.avgIntensity)}</td>
                 <td class="r">{st.avgDurationMin == null ? '–' : formatDuration(st.avgDurationMin)}</td>
                 <td class="r">{st.bedDays}</td>
+                <td class="r">{st.reducedDays}</td>
               </tr>
             {/if}
           {/each}
@@ -170,34 +212,47 @@
             <td class="r">{fmt1(s.avgIntensity)}</td>
             <td class="r">{s.avgDurationMin == null ? '–' : formatDuration(s.avgDurationMin)}{s.medianDurationMin != null ? ` (med. ${formatDuration(s.medianDurationMin)})` : ''}</td>
             <td class="r">{fmt1(s.per30(s.bedDays))}</td>
+            <td class="r">{fmt1(s.per30(s.reducedDays))}</td>
           </tr>
         </tbody>
       </table></div>
     </section>
 
-    <div class="cols">
-      <!-- 4. Sintomatici -->
-      <section>
-        <h2>Farmaci sintomatici</h2>
-        {#if s.efficacy.length}
-          <div class="tw"><table>
-            <thead><tr><th>Farmaco</th><th class="r">Gg/30</th><th class="r">Risposta completa 2 h</th><th class="r">Recidiva 24 h</th></tr></thead>
-            <tbody>
-              {#each s.efficacy as r (r.name)}
-                <tr>
-                  <td>{r.name} <span class="muted">({shortClass(r.cls)})</span></td>
-                  <td class="r">{fmt1(s.per30(r.days))}</td>
-                  <td class="r">{r.n ? `${pct(r.complete / r.n)} (n=${r.n})` : '–'}</td>
-                  <td class="r">{r.n ? pct(r.recurrence / r.n) : '–'}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table></div>
-        {:else}
-          <p class="muted">Nessun sintomatico registrato.</p>
-        {/if}
-      </section>
+    <!-- 4. Sintomatici -->
+    <section>
+      <h2>Farmaci sintomatici</h2>
+      {#if s.efficacy.length}
+        <div class="tw"><table>
+          <thead>
+            <tr>
+              <th rowspan="2">Farmaco</th><th class="r" rowspan="2">Gg/30</th>
+              <th class="c grp" colspan="3">Risposta a 2 h</th><th class="r" rowspan="2">Recidiva 24 h</th>
+              <th class="c grp" colspan="2">Assunzione dall'inizio</th>
+            </tr>
+            <tr><th class="r">completa</th><th class="r">parziale</th><th class="r">nessuna</th><th class="r">mediana</th><th class="r">entro 1 h</th></tr>
+          </thead>
+          <tbody>
+            {#each s.efficacy as r (r.name)}
+              {@const tm = timing.get(r.name.toLowerCase())}
+              <tr>
+                <td>{r.name} <span class="muted">({shortClass(r.cls)})</span></td>
+                <td class="r">{fmt1(s.per30(r.days))}</td>
+                <td class="r">{r.n ? `${pct(r.complete / r.n)} (n=${r.n})` : '–'}</td>
+                <td class="r">{r.n ? pct(r.partial / r.n) : '–'}</td>
+                <td class="r">{r.n ? pct(r.none / r.n) : '–'}</td>
+                <td class="r">{r.n ? pct(r.recurrence / r.n) : '–'}</td>
+                <td class="r">{tm?.medianDelayMin != null ? formatDuration(tm.medianDelayMin) : '–'}</td>
+                <td class="r">{tm?.timed ? `${pct(tm.within1h / tm.timed)} (n=${tm.timed})` : '–'}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table></div>
+      {:else}
+        <p class="muted">Nessun sintomatico registrato.</p>
+      {/if}
+    </section>
 
+    <div class="cols">
       <!-- 5. MOH e cronicità -->
       <section class="box">
         <h2>Uso eccessivo e cronicità</h2>
@@ -218,6 +273,29 @@
           {#if chronic.possibleChronicMigraine}<strong> Possibile emicrania cronica.</strong>{/if}
         </p>
       </section>
+
+      <!-- 6b. Check-in giornaliero -->
+      <section>
+        <h2>Check-in giornaliero</h2>
+        <p>Compilato in <strong>{ci.done}</strong> giorni su {ci.days} ({pct(ci.compliance)}).</p>
+        {#if ci.done >= MIN_CHECKINS}
+          <ul>
+            {#if ci.sleepN}<li>Sonno: {shares(ci.sleep, CHECKIN.sleep)}</li>{/if}
+            {#if ci.stressN}<li>Stress: {shares(ci.stress, CHECKIN.stress)}</li>{/if}
+            <li>
+              Fattori associati agli attacchi (oggi o il giorno dopo, tutto lo storico):
+              {#if factors.length}
+                {#each factors as f, i (f.id)}{i ? '; ' : ' '}{f.label.toLowerCase()} RR {fmt2(f.rr)} (IC 90% {fmt2(f.low)}–{fmt2(f.high)}, {f.exposedDays} gg){/each}.
+              {:else}
+                nessuno con RR ≥ 1,2 basato sui dati personali.
+              {/if}
+            </li>
+          </ul>
+          <p class="sub">Stime statistiche indicative, non diagnostiche (prior dalla letteratura aggiornati con i dati personali).</p>
+        {:else}
+          <p class="sub">Servono almeno {MIN_CHECKINS} check-in nel periodo per riassumere sonno, stress e fattori personali.</p>
+        {/if}
+      </section>
     </div>
 
     <div class="cols">
@@ -229,7 +307,7 @@
             <li>Classificazione: {classes.map(([id, n]) => `${CLASS_LABEL[id].replace('Compatibile con ', '')} ${pct(n / s.episodes.length)}`).join('; ')}</li>
             <li>Lato prevalente: {side ? `${labelOf(SIDES, side.id).toLowerCase()} (${pct(side.count / s.episodes.length)})` : 'non indicato'}</li>
             <li>Sintomi: {s.symptoms.slice(0, 5).map((x) => `${labelOf(SYMPTOMS, x.id).toLowerCase()} ${pct(x.pct)}`).join(', ') || '–'}</li>
-            <li>Aura: {s.auraCount ? `${s.auraCount} episodi (${pct(s.auraCount / s.episodes.length)}); ${auraTypes.map((a) => `${labelOf(AURAS, a.id).toLowerCase()} ${a.count}`).join(', ')}` : 'nessuna'}</li>
+            <li>Aura: {s.auraCount ? `${s.auraCount} episodi (${pct(s.auraCount / s.episodes.length)}); ${auraTypes.map((a) => `${labelOf(AURAS, a.id).toLowerCase()} ${a.count}`).join(', ')}${auraDur.medianMin != null ? `; durata mediana ${formatDuration(auraDur.medianMin)} (n=${auraDur.n})` : ''}` : 'nessuna'}</li>
             <li>Trigger principali: {s.triggers.slice(0, 3).map((x) => `${labelOf(TRIGGERS, x.id).toLowerCase()} ${pct(x.pct)}`).join(', ') || '–'}</li>
             {#if cycle}
               <li>Attacchi di emicrania perimestruali (−2/+3 gg): {pct(cycle.pct)} ({cycle.perimenstrual}/{cycle.total}; atteso ~20%){cycle.pattern ? '. Pattern compatibile con emicrania correlata al ciclo.' : ''}</li>
@@ -318,6 +396,10 @@
   .dochead h1 { font-size: 1.5rem; margin: 0; }
   .pname { font-size: 1.1rem; font-weight: 600; }
   .meta { text-align: right; color: var(--muted); }
+  .prof { margin: 0 0 6px; }
+  .flag { margin: 0 0 6px; padding: 3px 6px; border: 1px solid var(--warn-border); background: var(--warn-bg); border-radius: 4px; font-weight: 600; }
+  .c { text-align: center; }
+  th.grp { border-bottom: 1px solid var(--border); }
   section { margin-bottom: 8px; break-inside: avoid; }
   h2 { font-size: 0.95rem; margin: 0 0 4px; border-bottom: 1px solid var(--border); padding-bottom: 2px; }
   .sub { color: var(--muted); margin: 0 0 2px; }
@@ -355,6 +437,7 @@
     .doc { border: none; border-radius: 0; padding: 0; font-size: 7.5pt; background: #fff; color: #111; }
     .dochead h1 { font-size: 14pt; }
     .pname { font-size: 11pt; }
+    .flag { background: none; border: 1.5px solid #111; }
     h2 { font-size: 8.5pt; }
     .cols { grid-template-columns: 1fr 1fr; }
     .cals { grid-template-columns: repeat(var(--cols), 1fr); gap: 4px 8px; }

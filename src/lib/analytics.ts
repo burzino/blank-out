@@ -2,6 +2,7 @@
 import { intensityLevel } from './catalog';
 import { addDays, dayKey, daysBetween, episodeDays, keyToDate } from './clinic';
 import type { DayInfo, Episode } from './types';
+import type { TriggerRisk } from './advisor/types';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -138,6 +139,50 @@ export function tally(lists: string[][], total: number) {
   const map = new Map<string, number>();
   for (const l of lists) for (const id of new Set(l)) map.set(id, (map.get(id) ?? 0) + 1);
   return [...map.entries()].map(([id, count]) => ({ id, count, pct: total ? count / total : 0 })).sort((a, b) => b.count - a.count);
+}
+
+// ---------- Riepilogo check-in (report) ----------
+export interface CheckinSummary {
+  days: number; // giorni del periodo
+  done: number; // giorni con check-in completo (sonno e stress)
+  compliance: number; // done / days
+  sleep: Record<'poco' | 'ok' | 'troppo', number>; // quote sui check-in con il sonno indicato
+  sleepN: number;
+  stress: Record<'basso' | 'medio' | 'alto', number>;
+  stressN: number;
+}
+
+/** Aderenza al check-in e distribuzione di sonno e stress nel periodo [from, to]. */
+export function checkinSummary(days: DayInfo[], from: string, to: string): CheckinSummary {
+  const n = Math.max(0, daysBetween(from, to) + 1);
+  const sleep = { poco: 0, ok: 0, troppo: 0 };
+  const stress = { basso: 0, medio: 0, alto: 0 };
+  let done = 0;
+  let sleepN = 0;
+  let stressN = 0;
+  for (const d of days) {
+    const c = d.checkin;
+    if (!c || d.date < from || d.date > to) continue;
+    if (c.sleep && c.stress) done++;
+    if (c.sleep && c.sleep in sleep) {
+      sleep[c.sleep]++;
+      sleepN++;
+    }
+    if (c.stress && c.stress in stress) {
+      stress[c.stress]++;
+      stressN++;
+    }
+  }
+  const share = <K extends string>(r: Record<K, number>, tot: number) => {
+    for (const k in r) r[k] = tot ? r[k] / tot : 0;
+    return r;
+  };
+  return { days: n, done, compliance: n ? done / n : 0, sleep: share(sleep, sleepN), sleepN, stress: share(stress, stressN), stressN };
+}
+
+/** Fattori personali da mostrare al medico: stime con quota personale (misto/personale) e RR ≥ minRR. */
+export function reportFactors(list: TriggerRisk[], minRR = 1.2, max = 5): TriggerRisk[] {
+  return list.filter((t) => t.basis !== 'generale' && t.rr >= minRR).sort((a, b) => b.rr - a.rr).slice(0, max);
 }
 
 /** Lato prevalente (id) o null. */

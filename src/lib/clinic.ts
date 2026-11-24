@@ -239,6 +239,56 @@ export function computeStats(all: Episode[], from: string, to: string, now = new
   };
 }
 
+/** Mediana di una lista di numeri (null se vuota). */
+export function median(xs: number[]): number | null {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const h = s.length >> 1;
+  return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2;
+}
+
+// Ritardo massimo plausibile tra inizio dell'attacco e assunzione: oltre, è quasi sempre un errore di registrazione.
+const MAX_DELAY_MIN = 72 * 60;
+// Un'assunzione registrata poco prima dell'inizio (orari arrotondati) conta come immediata; prima ancora si scarta.
+const EARLY_SLACK_MIN = 60;
+
+/** Minuti dall'inizio dell'attacco all'assunzione; null se l'orario non è plausibile. */
+export function intakeDelayMin(e: Episode, m: MedIntake): number | null {
+  const d = (new Date(m.time).getTime() - new Date(e.start).getTime()) / 60000;
+  if (!isFinite(d) || d < -EARLY_SLACK_MIN || d > MAX_DELAY_MIN) return null;
+  return Math.max(0, d);
+}
+
+export interface IntakeTiming {
+  timed: number; // assunzioni con ritardo valutabile
+  medianDelayMin: number | null;
+  within1h: number; // assunzioni entro 60 minuti dall'inizio
+}
+
+/** Tempo dall'inizio dell'attacco all'assunzione, per farmaco (chiave: nome in minuscolo, come computeStats). */
+export function intakeTimingByDrug(episodes: Episode[], from: string, to: string): Map<string, IntakeTiming> {
+  const delays = new Map<string, number[]>();
+  for (const e of episodes)
+    for (const m of e.meds) {
+      const k = dayKey(m.time);
+      if (k < from || k > to) continue;
+      const d = intakeDelayMin(e, m);
+      if (d == null) continue;
+      const key = m.name.toLowerCase();
+      if (!delays.has(key)) delays.set(key, []);
+      delays.get(key)!.push(d);
+    }
+  const out = new Map<string, IntakeTiming>();
+  for (const [key, ds] of delays) out.set(key, { timed: ds.length, medianDelayMin: median(ds), within1h: ds.filter((d) => d <= 60).length });
+  return out;
+}
+
+/** Durata mediana dell'aura (minuti) e numero di episodi con durata registrata. */
+export function auraDurationSummary(episodes: Episode[]) {
+  const ds = episodes.filter((e) => e.aura.length && e.auraDurationMin != null && e.auraDurationMin > 0).map((e) => e.auraDurationMin!);
+  return { n: ds.length, medianMin: median(ds) };
+}
+
 // ---------- Avvisi: uso eccessivo di farmaci e cronicità ----------
 export interface Alert {
   id: string;

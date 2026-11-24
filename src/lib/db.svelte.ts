@@ -1,7 +1,8 @@
 // Archivio dati: tutto in memoria (reattivo) con scrittura su IndexedDB.
 // I volumi sono piccoli (anni di diario = poche migliaia di record), quindi la UI legge sempre dalla memoria.
 import { openDB, type IDBPDatabase } from 'idb';
-import type { BackupFile, DayInfo, Episode, Medication, Prophylaxis, Questionnaire } from './types';
+import { normalizeProfile } from './profile';
+import type { BackupFile, DayInfo, Episode, Medication, Profile, Prophylaxis, Questionnaire } from './types';
 
 type Stores = 'episodes' | 'medications' | 'prophylaxis' | 'questionnaires' | 'days' | 'meta';
 
@@ -28,7 +29,7 @@ export const data = $state({
   questionnaires: [] as Questionnaire[],
   days: [] as DayInfo[],
   customTriggers: [] as string[],
-  profile: {} as { name?: string; birthYear?: number }
+  profile: {} as Profile
 });
 
 export const uid = () => (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36));
@@ -53,7 +54,7 @@ export async function loadAll() {
   data.questionnaires = (questionnaires as Questionnaire[]).sort((a, b) => b.date.localeCompare(a.date));
   data.days = days;
   data.customTriggers = customTriggers ?? [];
-  data.profile = profile ?? {};
+  data.profile = normalizeProfile(profile);
   data.ready = true;
   try {
     await navigator.storage?.persist?.();
@@ -212,7 +213,7 @@ export async function importBackup(b: BackupFile) {
     for (const q of b.questionnaires ?? []) tx.objectStore('questionnaires').put(q);
     for (const day of b.days ?? []) tx.objectStore('days').put(day);
     tx.objectStore('meta').put(b.customTriggers ?? [], 'customTriggers');
-    tx.objectStore('meta').put(b.profile ?? {}, 'profile');
+    tx.objectStore('meta').put(normalizeProfile(b.profile), 'profile');
   } catch (err) {
     tx.done.catch(() => {});
     tx.abort();
